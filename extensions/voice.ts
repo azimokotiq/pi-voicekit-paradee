@@ -70,6 +70,7 @@ import {
 	getSessionStartPersistedConfig,
 	loadConfigWithSource,
 	loadGlobalToggleShortcut,
+	loadGlobalVoiceShortcut,
 	saveConfig,
 	saveGlobalVoiceFields,
 	type VoiceConfig,
@@ -844,6 +845,24 @@ export default function (pi: ExtensionAPI) {
 		.split("+")
 		.map((p) => (p.length <= 1 ? p.toUpperCase() : p[0]!.toUpperCase() + p.slice(1)))
 		.join("+");
+
+	// Speak-on-demand keys (local patch). Same startup-only, global-only resolution
+	// as the recording toggle: pi.registerShortcut() runs once at extension load.
+	const resolvedSpeakShortcut = loadGlobalVoiceShortcut(
+		"speakShortcut",
+		DEFAULT_CONFIG.speakShortcut || "alt+s"
+	);
+	const resolvedAutoSpeakShortcut = loadGlobalVoiceShortcut(
+		"autoSpeakShortcut",
+		DEFAULT_CONFIG.autoSpeakShortcut || "alt+a"
+	);
+	const shortcutLabel = (key: string) =>
+		key
+			.split("+")
+			.map((p) => (p.length <= 1 ? p.toUpperCase() : p[0]!.toUpperCase() + p.slice(1)))
+			.join("+");
+	const speakShortcutLabel = shortcutLabel(resolvedSpeakShortcut);
+	const autoSpeakShortcutLabel = shortcutLabel(resolvedAutoSpeakShortcut);
 
 	// Streaming session state
 	let activeSession: VoiceSession | null = null;
@@ -2620,6 +2639,109 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	// ─── Speak on demand ──────────────────────────────────────────────────
+	//
+	// Two gaps behind "it reads everything all the time": auto-narration has no
+	// length limit, and the only switch is the TTS master toggle — silencing
+	// narration also silences /voice-speak. So:
+	//
+	//   alt+s → read the LAST assistant reply; press again while it speaks to stop
+	//   alt+a → mute/unmute auto-narration only (ttsEnabled stays as it is, so
+	//           alt+s and /voice-speak keep working while muted)
+	//
+	// Both keys come from global settings (voice.speakShortcut / voice.autoSpeakShortcut).
+
+	/** Auto-narration length cap in force; 0 = narrate every reply (upstream default). */
+	function autoSpeakMaxChars(): number {
+		const v = config.ttsAutoSpeakMaxChars;
+		return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+	}
+
+	/** Plain text of the last assistant reply on the current session branch. */
+	function lastAssistantReplyText(sourceCtx: ExtensionContext): string {
+		try {
+			const entries = sourceCtx.sessionManager.getBranch();
+			for (let i = entries.length - 1; i >= 0; i--) {
+				const entry = entries[i] as { type?: string; message?: unknown } | undefined;
+				if (!entry || entry.type !== "message") continue;
+				const message = entry.message as { role?: string } | undefined;
+				if (!message || message.role !== "assistant") continue;
+				const text = extractAccumulatedText(message).trim();
+				if (text) return text;
+			}
+		} catch (err) {
+			voiceDebug("lastAssistantReplyText failed", { error: String(err) });
+		}
+		return "";
+	}
+
+	/**
+	 * alt+s / /voice-read: if something is speaking, stop it — otherwise read the
+	 * last assistant reply (or `explicitText` when /voice-read was given an argument).
+	 * One key for both directions so there is no mode to remember.
+	 */
+	async function speakLastReplyOrStop(handlerCtx: ExtensionContext, explicitText?: string): Promise<void> {
+		if (!explicitText && stopSpeechAndQueuedChunks()) {
+			handlerCtx.ui.notify("Speech stopped.", "info");
+			return;
+		}
+		const raw = (explicitText || lastAssistantReplyText(handlerCtx)).trim();
+		if (!raw) {
+			handlerCtx.ui.notify("No assistant reply to read yet.", "info");
+			return;
+		}
+		const { prepareForSpeech } = await import("./voice/tts-text-filter");
+		// Manual reads are NOT length-capped: the cap exists to stop narration the
+		// user did not ask for, and this is the request.
+		const prepared = prepareForSpeech(raw, {
+			maxChars: Number.POSITIVE_INFINITY,
+			stripCodeBlocks: true,
+			collapseLinks: true,
+		});
+		if (prepared.skipped) {
+			handlerCtx.ui.notify(`Nothing to read in the last reply (${prepared.reason ?? "empty"}).`, "info");
+			return;
+		}
+		voiceDebug("speak-on-demand", { chars: prepared.text.length, explicit: Boolean(explicitText) });
+		await runSpeak(handlerCtx, prepared.text);
+	}
+
+	/** Mute/unmute auto-narration only — never touches ttsEnabled. */
+	function setAutoSpeak(next: boolean, handlerCtx: ExtensionContext): void {
+		config.ttsAutoSpeak = next;
+		saveConfig(config, config.scope === "project" ? "project" : "global", currentCwd, {
+			loadedSource: configSource,
+		});
+		if (!next) {
+			stopSpeechAndQueuedChunks();
+		} else {
+			void warmupSelectedTts(() => config, "autospeak-on");
+		}
+		const cap = autoSpeakMaxChars();
+		const scope = next
+			? cap > 0
+				? ` (replies up to ${cap} spoken chars — ${speakShortcutLabel} or /voice-read for longer ones)`
+				: " (every reply)"
+			: ` — ${speakShortcutLabel} or /voice-read still reads on demand`;
+		handlerCtx.ui.notify(`Auto-narration ${next ? "ON" : "OFF"}${scope}.`, "info");
+	}
+
+	pi.registerShortcut(resolvedSpeakShortcut as KeyId, {
+		description: "Read the last assistant reply aloud (press again to stop)",
+		handler: async (handlerCtx) => {
+			ctx = handlerCtx;
+			await speakLastReplyOrStop(handlerCtx);
+		},
+	});
+
+	pi.registerShortcut(resolvedAutoSpeakShortcut as KeyId, {
+		description: "Mute or unmute automatic narration of replies",
+		handler: async (handlerCtx) => {
+			ctx = handlerCtx;
+			setAutoSpeak(!config.ttsAutoSpeak, handlerCtx);
+		},
+	});
+
 	// ─── Lifecycle ───────────────────────────────────────────────────────────
 
 	pi.on("session_start", async (event, startCtx) => {
@@ -2920,6 +3042,13 @@ export default function (pi: ExtensionAPI) {
 		if (voiceState === "warmup" || voiceState === "recording" || voiceState === "finalizing") return;
 		if (!fullText) return;
 
+		// Length-capped narration (voice.ttsAutoSpeakMaxChars > 0). A reply's total
+		// length is not knowable mid-stream, so with a cap set we buffer everything
+		// and decide once, at message_end. The alternative reads the first sentences
+		// of a long info dump and then has to cut itself off mid-sentence.
+		const cap = autoSpeakMaxChars();
+		if (cap > 0 && !isFinal) return;
+
 		let state = messageStreams.get(messageId);
 		if (!state) {
 			state = { spokenLen: 0, pending: Promise.resolve(), cancelled: false };
@@ -2958,11 +3087,27 @@ export default function (pi: ExtensionAPI) {
 		// Strip code blocks / links / emojis / abbreviations to spoken form.
 		const { prepareForSpeech } = await import("./voice/tts-text-filter");
 		const prepared = prepareForSpeech(chunk, {
-			maxChars: 2000,
+			maxChars: cap > 0 ? cap : 2000,
 			stripCodeBlocks: true,
 			collapseLinks: true,
 		});
-		if (prepared.skipped || !prepared.text.trim()) return;
+		if (prepared.skipped) {
+			// Too long = deliberately silent. Mark the reply as handled so the legacy
+			// turn_end fallback cannot narrate it either, and say where it went.
+			if (cap > 0 && prepared.stats.finalChars > cap) {
+				markReplySpoken(messageId);
+				lastAutoSpeakAt = Date.now();
+				voiceDebug("autoSpeak.skipped-long", { id: messageId, chars: prepared.stats.finalChars, cap });
+				if (ctx && ctx.hasUI) {
+					ctx.ui.notify(
+						`Not reading that reply — ${prepared.stats.finalChars} chars, over the ${cap} cap. ${speakShortcutLabel} or /voice-read to hear it.`,
+						"info"
+					);
+				}
+			}
+			return;
+		}
+		if (!prepared.text.trim()) return;
 
 		// Serialize per-message: chain onto pending so chunks play in
 		// order, never overlapping for the same message.
@@ -3045,9 +3190,22 @@ export default function (pi: ExtensionAPI) {
 		if (now - lastAutoSpeakAt < AUTO_SPEAK_RATE_LIMIT_MS) return;
 		const text = extractAccumulatedText(message).trim();
 		if (!text) return;
+		const cap = autoSpeakMaxChars();
 		const { prepareForSpeech } = await import("./voice/tts-text-filter");
-		const prepared = prepareForSpeech(text, { maxChars: 2000, stripCodeBlocks: true, collapseLinks: true });
-		if (prepared.skipped) return;
+		const prepared = prepareForSpeech(text, {
+			maxChars: cap > 0 ? cap : 2000,
+			stripCodeBlocks: true,
+			collapseLinks: true,
+		});
+		if (prepared.skipped) {
+			// Same rule as the streaming path: a reply over the cap is silent, and it
+			// must not be re-offered by the other auto-speak path either.
+			if (cap > 0 && prepared.stats.finalChars > cap) {
+				markReplySpoken(id);
+				voiceDebug("turn_end skipped-long", { id, chars: prepared.stats.finalChars, cap });
+			}
+			return;
+		}
 		voiceDebug("turn_end fallback speak", { id, chars: text.length });
 		lastAutoSpeakAt = now;
 		try {
@@ -3982,6 +4140,50 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("voice-read", {
+		description: `Read the last assistant reply aloud (${resolvedSpeakShortcut}, or pass text to speak something else)`,
+		handler: async (args, cmdCtx) => {
+			ctx = cmdCtx;
+			await speakLastReplyOrStop(cmdCtx, (args || "").trim() || undefined);
+		},
+	});
+
+	pi.registerCommand("voice-autospeak", {
+		description: `Auto-narration: on | off | <maxChars> (${resolvedAutoSpeakShortcut} toggles)`,
+		handler: async (args, cmdCtx) => {
+			ctx = cmdCtx;
+			const trimmed = (args || "").trim().toLowerCase();
+			if (!trimmed || trimmed === "status") {
+				const cap = autoSpeakMaxChars();
+				cmdCtx.ui.notify(
+					`Auto-narration: ${config.ttsAutoSpeak ? "ON" : "OFF"} · cap ${cap > 0 ? `${cap} spoken chars` : "none (every reply)"} · ${autoSpeakShortcutLabel} to mute/unmute · ${speakShortcutLabel} to read on demand`,
+					"info"
+				);
+				return;
+			}
+			const asNumber = Number(trimmed);
+			if (Number.isFinite(asNumber) && asNumber >= 0) {
+				config.ttsAutoSpeakMaxChars = Math.floor(asNumber);
+				saveConfig(config, config.scope === "project" ? "project" : "global", currentCwd, {
+					loadedSource: configSource,
+				});
+				const nextCap = autoSpeakMaxChars();
+				cmdCtx.ui.notify(
+					nextCap > 0
+						? `Auto-narration cap: ${nextCap} spoken chars — longer replies stay silent; ${speakShortcutLabel} reads them.`
+						: "Auto-narration cap removed — every reply is read.",
+					"info"
+				);
+				return;
+			}
+			if (trimmed === "on" || trimmed === "off") {
+				setAutoSpeak(trimmed === "on", cmdCtx);
+				return;
+			}
+			cmdCtx.ui.notify("Usage: /voice-autospeak [on|off|status|<maxChars>]", "warning");
+		},
+	});
+
 	pi.registerCommand("voice-speak-toggle", {
 		description: "Toggle TTS on/off (master switch)",
 		handler: async (_args, cmdCtx) => {
@@ -4071,7 +4273,11 @@ export default function (pi: ExtensionAPI) {
 			lines.push(`  Backend:      ${isLocal ? "local (sherpa-onnx)" : "deepgram (cloud REST)"}`);
 			lines.push(`  Language:     ${config.ttsLanguage ?? config.language ?? "en"}`);
 			lines.push(`  Speed:        ${(config.ttsSpeed ?? 1.0).toFixed(2)}x`);
-			lines.push(`  Auto-speak:   ${config.ttsAutoSpeak ? "yes" : "no"}`);
+			const cap = autoSpeakMaxChars();
+			lines.push(
+				`  Auto-speak:   ${config.ttsAutoSpeak ? (cap > 0 ? `yes, replies up to ${cap} chars` : "yes, every reply") : "no"} (${autoSpeakShortcutLabel})`
+			);
+			lines.push(`  Read on demand: ${speakShortcutLabel} · /voice-read (cap: /voice-autospeak)`);
 			lines.push("");
 
 			if (isLocal) {
@@ -4106,7 +4312,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			lines.push("");
-			lines.push("  Commands: /voice-speak <text>  ·  /voice-speak-stop  ·  /voice-speak-toggle");
+			lines.push("  Commands: /voice-speak <text>  ·  /voice-read  ·  /voice-autospeak  ·  /voice-speak-stop  ·  /voice-speak-toggle");
 			lines.push("            /voice-speak-test    ·  /voice-speak-models  ·  /voice-settings");
 			cmdCtx.ui.notify(lines.join("\n"), "info");
 		},

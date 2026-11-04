@@ -89,6 +89,31 @@ export interface VoiceConfig {
 	 */
 	ttsAutoSpeak?: boolean;
 	/**
+	 * Length cap, in characters of SPOKEN text, for automatic narration. A reply
+	 * whose prepared text is longer than this stays silent and is read on demand
+	 * with `speakShortcut` / `/voice-read`. 0 (default) = no cap, i.e. every reply
+	 * is narrated — the behaviour up to and including 0.4.2. Set e.g. 400 to have
+	 * only short answers read aloud.
+	 *
+	 * Why the cap is measured at the END of a reply: with sentence-level streaming
+	 * narration the total length is not knowable mid-stream, so a cap would either
+	 * start a long reply and cut it off, or delay every reply. Buffering to the end
+	 * and speaking the whole thing is the honest option: long replies never start
+	 * talking at all. The cost is ~1-2 s of extra latency on short replies.
+	 */
+	ttsAutoSpeakMaxChars?: number;
+	/**
+	 * Global-only shortcut that reads the last assistant reply aloud, or stops
+	 * playback when something is already speaking. Registered at extension load,
+	 * so it cannot be project-scoped (same rule as `toggleShortcut`).
+	 */
+	speakShortcut?: string;
+	/**
+	 * Global-only shortcut that mutes/unmutes automatic narration
+	 * (`ttsAutoSpeak`) without turning TTS itself off.
+	 */
+	autoSpeakShortcut?: string;
+	/**
 	 * v7.1.1: If true, an STT transcription is automatically submitted to
 	 * the agent (turn triggered) instead of just being placed in the
 	 * editor. The user-spoken text bypasses the manual `[enter]` step.
@@ -164,6 +189,9 @@ export const DEFAULT_CONFIG: VoiceConfig = {
 	ttsDeepgramVoiceId: "aura-asteria-en",
 	ttsSpeed: 1.0,
 	ttsAutoSpeak: true,
+	ttsAutoSpeakMaxChars: 0,
+	speakShortcut: "alt+s",
+	autoSpeakShortcut: "alt+a",
 	autoSubmitOnSpeak: false,
 	holdThresholdMs: 700,
 	ttsLanguage: undefined,
@@ -295,6 +323,25 @@ function migrateConfig(rawVoice: any, source: VoiceConfigSource, globalVoice?: u
 				? Math.max(0.5, Math.min(2.0, rawVoice.ttsSpeed))
 				: DEFAULT_CONFIG.ttsSpeed,
 		ttsAutoSpeak: typeof rawVoice.ttsAutoSpeak === "boolean" ? rawVoice.ttsAutoSpeak : DEFAULT_CONFIG.ttsAutoSpeak,
+		ttsAutoSpeakMaxChars:
+			typeof rawVoice.ttsAutoSpeakMaxChars === "number" && Number.isFinite(rawVoice.ttsAutoSpeakMaxChars)
+				? Math.max(0, Math.floor(rawVoice.ttsAutoSpeakMaxChars))
+				: DEFAULT_CONFIG.ttsAutoSpeakMaxChars,
+		// Shortcut registration is static at extension load — a project block cannot
+		// change the keys this process listens for, so these are global-only exactly
+		// like `toggleShortcut` above. Invalid values fall back to the default.
+		speakShortcut:
+			source !== "project" &&
+			typeof rawVoice.speakShortcut === "string" &&
+			isValidShortcut(rawVoice.speakShortcut)
+				? rawVoice.speakShortcut
+				: DEFAULT_CONFIG.speakShortcut,
+		autoSpeakShortcut:
+			source !== "project" &&
+			typeof rawVoice.autoSpeakShortcut === "string" &&
+			isValidShortcut(rawVoice.autoSpeakShortcut)
+				? rawVoice.autoSpeakShortcut
+				: DEFAULT_CONFIG.autoSpeakShortcut,
 		autoSubmitOnSpeak:
 			typeof rawVoice.autoSubmitOnSpeak === "boolean" ? rawVoice.autoSubmitOnSpeak : DEFAULT_CONFIG.autoSubmitOnSpeak,
 		holdThresholdMs:
@@ -383,6 +430,33 @@ export function loadGlobalToggleShortcut(options: ConfigPathOptions = {}): strin
 	return fallback;
 }
 
+/**
+ * Resolve one of the global-only shortcut fields from settings at startup.
+ * Mirrors `loadGlobalToggleShortcut()` — shortcuts are registered once when the
+ * extension loads, so they read from the GLOBAL settings block only. Reads disk
+ * once; the caller caches the result.
+ */
+export function loadGlobalVoiceShortcut(
+	field: "speakShortcut" | "autoSpeakShortcut",
+	fallback: string,
+	options: ConfigPathOptions = {}
+): string {
+	try {
+		const globalSettingsPath = getGlobalSettingsPath(options);
+		const globalVoice = readJsonFile(globalSettingsPath)[SETTINGS_KEY];
+		if (globalVoice && typeof globalVoice === "object" && typeof (globalVoice as any)[field] === "string") {
+			const candidate = (globalVoice as any)[field] as string;
+			if (isValidShortcut(candidate)) return candidate;
+			process.stderr.write(
+				`[pi-voicekit] Warning: invalid ${field} "${candidate}" in settings, using default "${fallback}"\n`
+			);
+		}
+	} catch {
+		// Fall through to default
+	}
+	return fallback;
+}
+
 /** Check if a URL points to a loopback address (localhost/127.0.0.1/::1). */
 export function isLoopbackEndpoint(endpoint: string): boolean {
 	try {
@@ -429,6 +503,8 @@ function serializeConfig(config: VoiceConfig, scope: VoiceSettingsScope): VoiceC
 		punctuationNoticeShown: scope === "project" ? undefined : config.punctuationNoticeShown,
 		// Shortcut registration is static at extension load time — project-scoped overrides cannot apply
 		toggleShortcut: scope === "project" ? undefined : config.toggleShortcut,
+		speakShortcut: scope === "project" ? undefined : config.speakShortcut,
+		autoSpeakShortcut: scope === "project" ? undefined : config.autoSpeakShortcut,
 		onboarding: {
 			...config.onboarding,
 			schemaVersion: VOICE_CONFIG_VERSION,
