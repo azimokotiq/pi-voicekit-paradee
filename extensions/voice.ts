@@ -3392,7 +3392,7 @@ export default function (pi: ExtensionAPI) {
 		if (result?.type === "download" && result.modelId) {
 			const model = LOCAL_MODELS.find((m) => m.id === result.modelId);
 			if (model) {
-				const { checkDownloadPrereqs, createProgressTracker, verifyDownload, formatBytes } = await import(
+				const { checkDownloadPrereqs, createProgressTracker, verifyDownload, formatBytes, describeError } = await import(
 					"./voice/model-download"
 				);
 				const { initSherpa, isSherpaAvailable, getSherpaError } = await import("./voice/sherpa-engine");
@@ -3440,10 +3440,26 @@ export default function (pi: ExtensionAPI) {
 				cmdCtx.ui.notify(`Starting download: ${model.name} (${model.size})…`, "info");
 
 				try {
-					await ensureModelDownloaded(model.id, model.sherpaModel.downloadUrls, model.sizeBytes, (raw) => {
-						const rich = tracker(raw);
-						if (rich) cmdCtx.ui.notify(rich.line, "info");
-					});
+					await ensureModelDownloaded(
+						model.id,
+						model.sherpaModel.downloadUrls,
+						model.sizeBytes,
+						(raw) => {
+							const rich = tracker(raw);
+							if (rich) cmdCtx.ui.notify(rich.line, "info");
+						},
+						undefined,
+						(retry) => {
+							// Connection reset / socket drop mid-transfer: the downloader resumes
+							// from the .tmp bytes, so surface it instead of looking like a hang.
+							cmdCtx.ui.notify(
+								`Model server dropped the connection — resuming ${retry.file} at ${formatBytes(
+									retry.resumeAt
+								)} (attempt ${retry.attempt + 1}/${retry.maxAttempts})\u2026`,
+								"warning"
+							);
+						}
+					);
 				} catch (err: any) {
 					const msg = err?.message || String(err);
 					const lines = [`Download failed: ${model.name}`];
@@ -3454,6 +3470,12 @@ export default function (pi: ExtensionAPI) {
 					} else if (msg.includes("HTTP 4") || msg.includes("HTTP 5")) {
 						lines.push(`Server error: ${msg}`);
 						lines.push("The model server may be temporarily down. Try again in a few minutes.");
+					} else if (msg.includes("ECONNRESET") || msg.includes("fetch failed") || msg.includes("socket hang up")) {
+						lines.push(`Cause: ${describeError(err)}`);
+						lines.push(
+							"The model server reset the connection (common on flaky links to huggingface.co).",
+							"Bytes already downloaded are kept and the next attempt resumes from them."
+						);
 					} else {
 						lines.push(`Error: ${msg}`);
 					}
