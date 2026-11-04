@@ -29,11 +29,15 @@ does not scale here).
 
 Paradee is the same voice, distilled. On the same box:
 
-| model                  | RTF, 1 thread | RTF, 4 threads | 298-char reply | audio | disk   |
-| ---------------------- | ------------- | -------------- | -------------- | ----- | ------ |
-| `kokoro-int8-en-v0_19` | 2.20          | 2.20           | 33.8 s         | 18.3 s | 152 MB |
-| `kitten-nano-en-v0_2`  | 0.54          | —              | ~12 s          | 18.0 s | 41 MB  |
-| **`paradee-8m-v1_0`**  | **0.12**      | **0.07**       | **1.4 s**      | 18.3 s | 8.7 MB |
+| model                  | RTF, 1 thread | RTF, 4 threads | 298-char reply | disk   |
+| ---------------------- | ------------- | -------------- | -------------- | ------ |
+| `kokoro-int8-en-v0_19` | 2.20          | 2.20           | 33.8 s         | 152 MB |
+| `kitten-nano-en-v0_2`  | 0.54          | —              | ~12 s          | 41 MB  |
+| **`paradee-8m-v1_0`**  | **0.12**      | **0.07**       | **1.4 s**      | 8.7 MB |
+
+RTF is synthesised-seconds per audio-second (lower is better); the reply column is the measured wall
+clock for the same 298-character text, which is why it moves 24× while RTF moves 18× — the models do
+not pace that text identically.
 
 Measured through the shipped code path (`synthesize()`, not a side script): cold **3.9 s** including
 the one-time ONNX session load, then warm **RTF 0.086 — 8.65 s of audio in 743 ms**. Per-utterance

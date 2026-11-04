@@ -6,7 +6,8 @@
 > [Paradee-8M](https://github.com/sahilmahendrakar/paradee) local TTS backend — Kokoro's `af_heart`
 > voice distilled to 8.07M parameters, warm **RTF 0.09** where Kokoro measures 2.2 — plus the seven
 > voice fixes that made it usable (warm-up, no double narration, stop-queued-chunks, speak-on-demand,
-> Windows mic pick, download retry). Eight commits on top of the `v0.4.2` tag, nothing else changed.
+> Windows mic pick, download retry). Eight commits of source changes on top of the `v0.4.2` tag —
+> 9 files, +1503/−145 — plus the documentation and patch set in `paradee/`.
 > **Read [`paradee/README.md`](paradee/README.md)** for the numbers, the load-order constraint and
 > the install; `paradee/patches/` holds the same changes as re-appliable patches.
 
