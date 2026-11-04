@@ -101,7 +101,7 @@ import {
 } from "./voice/local";
 import { shouldArmReleaseDetectOnRepeat, decideRecordingStartTimer } from "./voice/hold-to-talk";
 import { GapTimer, type TimerPort } from "./voice/release-controller";
-import { audioToolOrder, type AudioToolName } from "./voice/audio-tool";
+import { audioToolOrder, detectWindowsAudioDevice, type AudioToolName } from "./voice/audio-tool";
 import { isPunctuationModelReady, punctuationModelFilePath, punctuationModelPath } from "./voice/punctuation-model";
 import {
 	preparePunctuation,
@@ -249,26 +249,6 @@ function commandExists(cmd: string): boolean {
 	return result;
 }
 
-/** Detect the first Windows DirectShow audio input device name via ffmpeg.
- * DirectShow has no "default" alias — must enumerate and pick the first audio device.
- */
-function detectWindowsAudioDevice(): string | null {
-	try {
-		const result = spawnSync("ffmpeg", ["-f", "dshow", "-list_devices", "true", "-i", "dummy"], {
-			timeout: 3000,
-			encoding: "utf-8",
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-		// ffmpeg outputs device list to stderr
-		const output = result.stderr || "";
-		// Match lines like: [dshow @ ...] "Microphone (Realtek HD Audio)" (audio)
-		const match = output.match(/"([^"]+)"\s*\(audio\)/);
-		return match?.[1] || null;
-	} catch {
-		return null;
-	}
-}
-
 interface AudioCaptureTool {
 	name: string;
 	cmd: string;
@@ -277,6 +257,18 @@ interface AudioCaptureTool {
 
 // Try available audio capture tools in the order given by audioToolOrder()
 let _cachedAudioTool: AudioCaptureTool | null | undefined;
+
+// Last capture-tool stderr line, so a broken capture pipeline is reported as what
+// it actually is instead of always blaming microphone permissions.
+let _lastCaptureStderr = "";
+
+function noteCaptureStderr(msg: string): void {
+	_lastCaptureStderr = msg.replace(/^\[[^\]]*\]\s*/, "").slice(0, 200);
+}
+
+function captureErrorSuffix(): string {
+	return _lastCaptureStderr ? ` (${_lastCaptureStderr})` : "";
+}
 
 function probeSox(): AudioCaptureTool | null {
 	if (!commandExists("rec")) return null;
@@ -415,7 +407,7 @@ function startStreamingSession(
 		callbacks.onError("No audio capture tool found. Install one of: sox, ffmpeg, or arecord (Linux)");
 		return null;
 	}
-	voiceDebug("Using audio capture tool:", audioTool.name);
+	voiceDebug("Using audio capture tool:", audioTool.name, audioTool.args.join(" "));
 
 	const recProc = spawn(audioTool.cmd, audioTool.args, { stdio: ["pipe", "pipe", "pipe"] });
 
@@ -1603,7 +1595,10 @@ export default function (pi: ExtensionAPI) {
 					resetHoldState({ cooldown: 3000 });
 					try {
 						if (!meta.hadAudio) {
-							ctx?.ui.notify("Microphone captured no audio. Check mic permissions.", "error");
+							ctx?.ui.notify(
+								"Microphone captured no audio. Check mic permissions." + captureErrorSuffix(),
+								"error",
+							);
 						} else if (!meta.hadSpeech) {
 							ctx?.ui.notify("Microphone captured silence — no speech detected.", "warning");
 						} else {
@@ -1795,11 +1790,13 @@ export default function (pi: ExtensionAPI) {
 				setVoiceState("idle");
 				return false;
 			}
+			voiceDebug("local capture:", audioTool.name, audioTool.args.join(" "));
 			const recProc = spawn(audioTool.cmd, audioTool.args, { stdio: ["pipe", "pipe", "pipe"] });
 			recProc.stderr?.on("data", (d: Buffer) => {
 				const msg = d.toString().trim();
 				if (msg.includes("buffer overrun") || msg.includes("Discarding") || msg.includes("Last message repeated"))
 					return;
+				noteCaptureStderr(msg);
 				voiceDebug(`${audioTool.name} stderr:`, msg);
 			});
 			session = startLocalSession(recProc, recordingCallbacks);
