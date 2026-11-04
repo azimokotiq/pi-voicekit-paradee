@@ -52,6 +52,17 @@ export interface TtsVoice {
 	gender?: "male" | "female" | "neutral";
 }
 
+/** One file of a multi-file (`files[]`) model install. */
+export interface TtsModelFile {
+	/** Source URL (Hugging Face `resolve/main/...`). */
+	url: string;
+	/** Destination path relative to the model dir, e.g. "paradee_int8.onnx". */
+	target: string;
+	sizeBytes?: number;
+	/** Optional SHA-256 of this file; verified after download when set. */
+	sha256?: string;
+}
+
 export interface TtsLocalModelInfo {
 	id: string;
 	name: string;
@@ -81,6 +92,22 @@ export interface TtsLocalModelInfo {
 	license: string;
 	/** Sherpa-onnx model slot for the engine to dispatch on. */
 	sherpaSlot: TtsSherpaSlot;
+	/**
+	 * Runtime backend. Defaults to "sherpa" = sherpa-onnx-node OfflineTts using
+	 * `sherpaSlot`. "paradee" = the Paradee-8M runtime in `tts-paradee.ts`
+	 * (onnxruntime-node + eSpeak-ng G2P + misaki mapping). Paradee's graph takes
+	 * phoneme ids and returns a 24 kHz waveform, so it cannot be expressed as an
+	 * OfflineTts slot at all — `sherpaSlot` stays "kokoro" for the thread budget
+	 * and picker grouping only.
+	 */
+	backend?: "sherpa" | "paradee";
+	/**
+	 * Multi-file install (a Hugging Face model repo) instead of one sherpa
+	 * .tar.bz2: each file is downloaded to `<modelDir>/<target>`. When present,
+	 * the installer skips tar extraction entirely and `isTtsModelInstalled()`
+	 * checks these files instead of `tokens.txt`.
+	 */
+	files?: TtsModelFile[];
 	/** Voices available in this model (always at least one). */
 	voices: TtsVoice[];
 	/** Default voice (sid) used if the user hasn't picked one. */
@@ -127,6 +154,49 @@ export const DEFAULT_TTS_MODEL = "kitten-nano-en-v0_2";
  * grouped in the settings panel by sherpa slot.
  */
 export const TTS_LOCAL_MODELS: TtsLocalModelInfo[] = [
+	// ═══════════════════════════════════════════════════════════════════════
+	// TIER 0+ — Paradee: Kokoro's af_heart voice distilled to 8.07M params.
+	// One 9 MB int8 ONNX file at RTF ~0.07-0.12 measured 2026-10-17 on
+	// Windows/x64 (1 thread 0.12, 4 threads 0.07): a 298-character reply in
+	// 1.4 s against ~34 s for Kokoro-int8 and ~12 s for Kitten Nano. Quality is
+	// close to the teacher (UTMOS 4.41 vs 4.52, same WER). One voice, English.
+	// https://github.com/sahilmahendrakar/paradee
+	// ═══════════════════════════════════════════════════════════════════════
+	{
+		id: "paradee-8m-v1_0",
+		name: "Paradee 8M (Kokoro af_heart)",
+		size: "~9 MB",
+		sizeBytes: 9_039_745,
+		runtimeRamMB: 250,
+		notes:
+			"Fastest high-quality English voice here — Kokoro's af_heart distilled to 8M params. " +
+			"9 MB, ~10-15x real time, one voice. Needs the onnxruntime-node + phonemizer packages.",
+		languages: ["en"],
+		tier: "edge",
+		preferred: false,
+		accuracy: 5,
+		speed: 5,
+		license: "Apache-2.0",
+		sherpaSlot: "kokoro", // thread budget + picker grouping only; see `backend`
+		backend: "paradee",
+		voices: [{ sid: 0, name: "af_heart (female)", gender: "female" }],
+		defaultSid: 0,
+		archiveUrl: "https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.0/resolve/main/onnx/paradee_int8.onnx",
+		files: [
+			{
+				url: "https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.0/resolve/main/onnx/paradee_int8.onnx",
+				target: "paradee_int8.onnx",
+				sizeBytes: 9_037_971,
+				sha256: "60e8f8a1bc7c546488154e9d99ecac6e9c50baf3f4b684c5b0de48ea03b698eb",
+			},
+			{
+				url: "https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.0/resolve/main/config.json",
+				target: "config.json",
+				sizeBytes: 1_774,
+			},
+		],
+		sampleRate: 24000,
+	},
 	// ═══════════════════════════════════════════════════════════════════════
 	// TIER 0 — Default first-run (English-only, smallest)
 	// ═══════════════════════════════════════════════════════════════════════
@@ -790,6 +860,10 @@ export function getTtsModelDir(modelId: string): string {
 export function isTtsModelInstalled(modelId: string): boolean {
 	const dir = getTtsModelDir(modelId);
 	if (!fs.existsSync(dir)) return false;
+	// Multi-file models (Hugging Face repos) ship no tokens.txt — check the
+	// files the catalog says they need instead.
+	const files = TTS_LOCAL_MODELS.find((m) => m.id === modelId)?.files;
+	if (files?.length) return files.every((f) => fs.existsSync(path.join(dir, f.target)));
 	const tokens = path.join(dir, "tokens.txt");
 	// Every supported slot (kitten/vits/kokoro) ships a tokens.txt at
 	// the archive root, so its presence is a robust install marker
@@ -806,11 +880,15 @@ export function isTtsModelInstalled(modelId: string): boolean {
  */
 export function getInstalledTtsModelDir(modelId: string): string {
 	if (!isTtsModelInstalled(modelId)) {
+		const model = getTtsModel(modelId);
+		const manual = model.files?.length
+			? model.files.map((f) => `curl -L "${f.url}" -o "${path.join(getTtsModelDir(modelId), f.target)}"`).join(" && ")
+			: `curl -L ${model.archiveUrl} | tar xj -C "${getTtsModelsDir()}"`;
 		throw new Error(
 			`TTS model "${modelId}" is not installed. ` +
 				`Run /voice-settings → Models tab → install ${modelId}, ` +
 				`or download manually: ` +
-				`curl -L ${getTtsModel(modelId).archiveUrl} | tar xj -C "${getTtsModelsDir()}"`
+				manual
 		);
 	}
 	return getTtsModelDir(modelId);
@@ -951,6 +1029,52 @@ export function ensureTtsModelInstalled(
  * Note: signature matches the original ensureTtsModelInstalled — pre-v7.0.1
  * callers that didn't bind the return value still work.
  */
+/**
+ * Install a `files[]` model: download each file into a staging directory
+ * (resume-aware, same partial-file semantics as the archive path), verify any
+ * pinned SHA-256, then rename the staging dir into place.
+ */
+async function installFiles(
+	model: TtsLocalModelInfo,
+	dir: string,
+	opts: { signal?: AbortSignal; onProgress?: (info: TtsInstallProgress) => void }
+): Promise<TtsInstallResult> {
+	const files = model.files!;
+	const totalBytes = files.reduce((n, f) => n + (f.sizeBytes ?? 0), 0);
+	fs.mkdirSync(getTtsModelsDir(), { recursive: true });
+	const stagingDir = `${dir}.staging-${process.pid}`;
+	let firstHash = "";
+	try {
+		for (const f of files) {
+			if (opts.signal?.aborted) throw makeAbortErr();
+			const target = path.join(stagingDir, f.target);
+			fs.mkdirSync(path.dirname(target), { recursive: true });
+			opts.onProgress?.({ phase: "download", totalBytes });
+			await downloadArchive(f.url, target, opts);
+			if (f.sha256) {
+				opts.onProgress?.({ phase: "verify" });
+				const got = await sha256OfFile(target, opts.signal);
+				if (got.toLowerCase() !== f.sha256.toLowerCase()) {
+					throw new Error(
+						`Integrity check failed for ${model.id}/${f.target}: expected ${f.sha256}, got ${got}. ` +
+							`Delete ${target} and retry, or check for a corrupted upstream file.`
+					);
+				}
+				if (!firstHash) firstHash = got;
+			}
+		}
+		opts.onProgress?.({ phase: "done" });
+		fs.mkdirSync(path.dirname(dir), { recursive: true });
+		fs.renameSync(stagingDir, dir);
+		return { dir, archiveSha256: firstHash };
+	} catch (err) {
+		try {
+			fs.rmSync(stagingDir, { recursive: true, force: true });
+		} catch {}
+		throw err;
+	}
+}
+
 async function doInstall(
 	modelId: string,
 	opts: {
@@ -966,6 +1090,11 @@ async function doInstall(
 		return { dir, archiveSha256: model.archiveSha256 ?? "" };
 	}
 	if (opts.signal?.aborted) throw makeAbortErr();
+
+	// Multi-file models (e.g. Paradee on Hugging Face) download straight into a
+	// staging dir and are renamed into place — no archive, no tar (and so none
+	// of the bsdtar/MSYS-tar failure modes that patch #2 had to work around).
+	if (model.files?.length) return installFiles(model, dir, opts);
 
 	const ttsDir = getTtsModelsDir();
 	fs.mkdirSync(ttsDir, { recursive: true });

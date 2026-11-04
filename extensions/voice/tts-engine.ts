@@ -46,6 +46,7 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import { loadSherpa, getSherpaModule, getSherpaError, isSherpaAvailable } from "./sherpa-loader";
 import { type TtsLocalModelInfo, modelSupportsLanguage, getTtsModel } from "./tts-local-models";
+import { synthesizeParadee, preloadParadee, releaseParadee } from "./tts-paradee";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -243,6 +244,9 @@ async function doCreateTts(model: TtsLocalModelInfo, modelDir: string): Promise<
  */
 export function clearTtsCache(): void {
 	ttsCache.clear();
+	// Paradee sessions are separate native handles (onnxruntime-node), not
+	// OfflineTts instances, so they need their own release.
+	void releaseParadee();
 }
 
 // ─── Warmup ──────────────────────────────────────────────────────────────────
@@ -273,6 +277,10 @@ export async function warmupTts(
 	opts: { signal?: AbortSignal } = {}
 ): Promise<boolean> {
 	if (opts.signal?.aborted) return false;
+	// Paradee has its own runtime (onnxruntime-node), so it must not be warmed
+	// through sherpa — loadSherpa() would succeed but getOrCreateTts() would
+	// build an OfflineTts with the wrong graph for this model.
+	if (model.backend === "paradee") return preloadParadee(modelDir, getTtsThreads(model.sherpaSlot));
 	try {
 		const ok = await loadSherpa();
 		if (!ok) return false;
@@ -327,14 +335,35 @@ export async function synthesize(opts: SynthesizeOpts): Promise<TtsAudio> {
 			throw makeAbortError();
 		}
 
-		// 3. Make sure the engine is loaded.
+		// 3. Paradee-8M speaks through onnxruntime-node, not sherpa's
+		//    OfflineTts: its graph takes misaki phoneme ids and returns a
+		//    24 kHz waveform directly (see tts-paradee.ts). Language validation,
+		//    abort wiring and the NaN guard below still apply, but the sherpa
+		//    loader and the OfflineTts cache are bypassed entirely.
+		if (model.backend === "paradee") {
+			const audio = await synthesizeParadee({
+				modelDir,
+				text,
+				speed: clampSpeed(opts.speed ?? 1.0),
+				// Paradee is a single American-English voice (af_heart); map any
+				// en-* tag onto the eSpeak-ng voice its G2P was validated with.
+				language: language.startsWith("en") ? "en-us" : language,
+				signal,
+				threads: getTtsThreads(model.sherpaSlot),
+			});
+			opts.onProgress?.({ samples: audio.samples, progress: 1 });
+			if (aborted) throw makeAbortError();
+			return audio;
+		}
+
+		// 4. Make sure the engine is loaded.
 		const ok = await loadSherpa();
 		if (aborted) throw makeAbortError();
 		if (!ok) {
 			throw new Error(`sherpa-onnx not available: ${getSherpaError() ?? "unknown error"}`);
 		}
 
-		// 4. Get or create the OfflineTts instance.
+		// 5. Get or create the OfflineTts instance.
 		const cached = await getOrCreateTts(model, modelDir);
 		if (aborted) throw makeAbortError();
 
@@ -348,7 +377,7 @@ export async function synthesize(opts: SynthesizeOpts): Promise<TtsAudio> {
 			);
 		}
 
-		// 5. Compute generate() args.
+		// 6. Compute generate() args.
 		// We use the LEGACY generateAsync({ text, sid, speed }) shape
 		// because it works on every sherpa-onnx-node release we've
 		// tested (1.12.29 + 1.13.0). Two upstream bugs informed this:
@@ -370,7 +399,7 @@ export async function synthesize(opts: SynthesizeOpts): Promise<TtsAudio> {
 		const sid = clampSid(opts.sid ?? model.defaultSid, model);
 		const speed = clampSpeed(opts.speed ?? 1.0);
 
-		// 6. Serialize generates against this CachedTts instance via the
+		// 7. Serialize generates against this CachedTts instance via the
 		// chain extension below — see the `generateChain` doc on CachedTts.
 		const { previousTail, release: resolveOurTail } = extendChain(cached);
 		await previousTail.catch(() => {}); // ignore prior failure

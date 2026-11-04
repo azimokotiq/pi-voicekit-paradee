@@ -72,6 +72,8 @@
     "package.json"
   ],
   "optionalDependencies": {
-    "sherpa-onnx-node": "^1.13.0"
+    "sherpa-onnx-node": "^1.13.0",
+    "onnxruntime-node": "^1.30.0",
+    "phonemizer": "^1.2.1"
   }
 }

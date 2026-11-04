@@ -96,6 +96,21 @@ async function doLoadSherpa(): Promise<boolean> {
 		// it, the namespace is fully-populated (Bun); otherwise prefer
 		// `.default` when it carries createAsync; final fallback is the
 		// namespace as-is so future runtime variants degrade gracefully.
+		// onnxruntime-node must be dlopened BEFORE sherpa-onnx-node. Both packages
+		// bundle their own copy of ONNX Runtime, and once one is resident the
+		// Windows loader refuses the other's native binding outright —
+		// `require("onnxruntime-node")` then fails with "The operating system cannot
+		// run %1. …onnxruntime_binding.node". This function is the only way sherpa
+		// enters the process (voice.ts loads every ./voice/* module lazily, so no
+		// static import can win the race), so prime ORT here — ~30 ms, once — and the
+		// Paradee TTS backend works no matter which feature runs first. If the
+		// optional dependency is absent this is a no-op and sherpa behaves exactly
+		// as before.
+		try {
+			await import("onnxruntime-node");
+		} catch {
+			/* optional dependency (Paradee backend); sherpa does not need it */
+		}
 		const ns = await import("sherpa-onnx-node");
 		const top = ns as any;
 		const def = (ns as any).default;
