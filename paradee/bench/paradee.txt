@@ -1,0 +1,18 @@
+session inputs=["input_ids","speed"] outputs=["waveform"] load 3367 ms
+
+threads=1
+     4 ch →   129 ms, audio 0.95 s, RTF 0.136
+    g2p raw="jˈɛs" misaki="jˈɛs"
+    wav peak=0.287 samples=22800
+    76 ch →   554 ms, audio 4.92 s, RTF 0.112
+    wav peak=0.309 samples=118200
+   152 ch →  1131 ms, audio 10.15 s, RTF 0.111
+    wav peak=0.346 samples=243600
+   298 ch →  2173 ms, audio 18.25 s, RTF 0.119
+    wav peak=0.340 samples=438000
+
+threads=4
+     4 ch →    75 ms, audio 0.95 s, RTF 0.079
+    76 ch →   332 ms, audio 4.92 s, RTF 0.067
+   152 ch →   729 ms, audio 10.15 s, RTF 0.072
+   298 ch →  1362 ms, audio 18.25 s, RTF 0.075

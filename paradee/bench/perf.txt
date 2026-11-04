@@ -1,0 +1,12 @@
+model kokoro-int8-en-v0_19 slot=kokoro sampleRate=24000 voices=11 dir=C:\Users\agmun\.pi\models\tts\kokoro-int8-en-v0_19
+cold synthesize    19059 ms  audio 6.95 s  sr=24000
+warm synthesize    15950 ms  audio 6.95 s  RTF 2.296
+short (20 ch)    4822 ms  audio 1.26 s  ← per-call overhead
+long  (432 ch)   43993 ms  audio 19.94 s
+
+threads  load ms   synthesize ms   audio s   RTF
+2          2058           16373       6.95   2.357
+4          1939           15327       6.95   2.206
+6          1934           15275       6.95   2.199
+8          2096           15701       6.95   2.260
+12         1837           15338       6.95   2.208

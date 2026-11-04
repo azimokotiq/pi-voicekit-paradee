@@ -1,0 +1,12 @@
+--- orig/package.json	2026-10-17 16:47:44.166025900 +0200
++++ fixed/package.json	2026-10-17 17:17:43.532015800 +0200
+@@ -72,6 +72,8 @@
+     "package.json"
+   ],
+   "optionalDependencies": {
+-    "sherpa-onnx-node": "^1.13.0"
++    "sherpa-onnx-node": "^1.13.0",
++    "onnxruntime-node": "^1.30.0",
++    "phonemizer": "^1.2.1"
+   }
+ }

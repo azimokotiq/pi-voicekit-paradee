@@ -1,0 +1,52 @@
+--- pi-voicekit-no-double-narration/orig/voice.ts	2026-10-17 20:24:56.970133900 +0200
++++ pi-voicekit-no-double-narration/fixed/voice.ts	2026-10-17 20:25:44.192235900 +0200
+@@ -2850,6 +2850,16 @@
+ 		cancelledMessageIds.add(id);
+ 		if (cancelledMessageIds.size > 64) cancelledMessageIds.delete(cancelledMessageIds.values().next().value as string);
+ 	}
++	// Replies the streaming path already spoke. message_end drops the stream state
++	// as soon as the last chunk finishes playing, so with a TTS model whose RTF is
++	// well under 1 the state is gone before turn_end fires — and the legacy
++	// fallback then reads "no state" as "nobody spoke this" and repeats the whole
++	// reply. Bounded FIFO, same shape as cancelledMessageIds.
++	const spokenMessageIds = new Set<string>();
++	function markReplySpoken(id: string): void {
++		spokenMessageIds.add(id);
++		if (spokenMessageIds.size > 64) spokenMessageIds.delete(spokenMessageIds.values().next().value as string);
++	}
+ 	/** User-initiated speech stop: kill the active utterance AND the chunks of
+ 	 *  this reply still queued behind it. Used by [esc], /voice-speak-stop,
+ 	 *  TTS disable, and by starting a recording (mic-before-speech feedback). */
+@@ -2999,6 +3009,15 @@
+ 		streamDiag(`message_end id=${id} chars=${fullText.length} updates_seen=${mu_count}`);
+ 		mu_count = 0;
+ 		await maybeSpeakNew(id, fullText, true);
++		// The streaming path owned this reply: if it queued anything, remember that
++		// even once the stream state is dropped, so turn_end cannot re-speak it.
++		// Not marked when nothing was queued (e.g. the mic was hot) — the fallback
++		// is still allowed to speak in that case.
++		const flushed = messageStreams.get(id);
++		if (flushed && flushed.spokenLen > 0) {
++			markReplySpoken(id);
++			lastAutoSpeakAt = Date.now();
++		}
+ 		// Drop the stream state once flushed — prevents unbounded growth.
+ 		const state = messageStreams.get(id);
+ 		if (state) {
+@@ -3020,7 +3039,7 @@
+ 		// If message_update already drained this message's stream
+ 		// state, the streaming path handled it — skip.
+ 		const state = messageStreams.get(id);
+-		if (state || cancelledMessageIds.has(id)) return;
++		if (state || cancelledMessageIds.has(id) || spokenMessageIds.has(id)) return;
+ 		if (voiceState === "warmup" || voiceState === "recording" || voiceState === "finalizing") return;
+ 		const now = Date.now();
+ 		if (now - lastAutoSpeakAt < AUTO_SPEAK_RATE_LIMIT_MS) return;
+@@ -3029,6 +3048,7 @@
+ 		const { prepareForSpeech } = await import("./voice/tts-text-filter");
+ 		const prepared = prepareForSpeech(text, { maxChars: 2000, stripCodeBlocks: true, collapseLinks: true });
+ 		if (prepared.skipped) return;
++		voiceDebug("turn_end fallback speak", { id, chars: text.length });
+ 		lastAutoSpeakAt = now;
+ 		try {
+ 			if (ctx) await runSpeak(ctx, prepared.text);

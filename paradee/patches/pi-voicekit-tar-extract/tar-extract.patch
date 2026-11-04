@@ -1,0 +1,181 @@
+--- a/extensions/voice/tts-local-models.ts
++++ b/extensions/voice/tts-local-models.ts
+@@ -30,7 +30,7 @@
+ import * as fs from "node:fs";
+ import * as os from "node:os";
+ import * as path from "node:path";
+-import { spawn } from "node:child_process";
++import { spawn, spawnSync } from "node:child_process";
+ import { createHash } from "node:crypto";
+ 
+ const TTS_RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models";
+@@ -1222,25 +1222,159 @@
+ 	});
+ }
+ 
++/**
++ * Which tar to spawn — and why it matters on Windows.
++ *
++ * Windows ships bsdtar as `C:\Windows\System32\tar.exe`, and CreateProcess
++ * searches System32 BEFORE PATH, so `spawn("tar")` gets bsdtar even when pi runs
++ * from Git Bash. bsdtar on Windows has NO internal bzip2: `-j` is implemented as
++ * the external filter program `bzip2 -d`. When Git Bash's MSYS bzip2.exe happens
++ * to be on PATH, bsdtar launches it and the pipe deadlocks after ~140 KB — the
++ * install then sits at "Extracting…" forever with tar using no CPU at all. With
++ * no bzip2 on PATH it instead fails fast. GNU tar (Git Bash / MSYS2) links bzip2
++ * in and extracts the same archive in seconds, so prefer it by absolute path.
++ */
++let cachedTar: string | null | undefined;
++
++function isGnuTar(bin: string): boolean {
++	try {
++		const r = spawnSync(bin, ["--version"], { encoding: "utf8", timeout: 5000 });
++		return /GNU tar/i.test(r.stdout ?? "");
++	} catch {
++		return false;
++	}
++}
++
++export function resolveTar(): string {
++	if (cachedTar !== undefined) return cachedTar ?? "tar";
++	let chosen: string | null = null;
++	if (process.platform === "win32") {
++		const system = path
++			.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")
++			.toLowerCase();
++		const seen = new Set<string>();
++		for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
++			if (!dir) continue;
++			const cand = path.join(dir, "tar.exe");
++			const key = cand.toLowerCase();
++			if (seen.has(key) || key === system) continue;
++			seen.add(key);
++			if (!fs.existsSync(cand)) continue;
++			if (isGnuTar(cand)) {
++				chosen = cand;
++				break;
++			}
++		}
++	}
++	cachedTar = chosen;
++	return chosen ?? "tar";
++}
++
++/** Kill an extraction that writes nothing for this long (turns a wedge into an error). */
++const EXTRACT_STALL_MS = 60_000;
++
++/** True iff nothing under `dir` has been created/modified for `stallMs` (measured from `nowMs`). */
++export function extractStalled(dir: string, startedAtMs: number, nowMs: number, stallMs = EXTRACT_STALL_MS): boolean {
++	let newest = startedAtMs;
++	try {
++		for (const name of fs.readdirSync(dir)) {
++			try {
++				newest = Math.max(newest, fs.statSync(path.join(dir, name)).mtimeMs);
++			} catch {
++				// raced with a rename/unlink — ignore this entry
++			}
++		}
++	} catch {
++		return false; // directory vanished; the close handler reports the real error
++	}
++	return nowMs - newest >= stallMs;
++}
++
++function extractHint(tarBin: string, tarStderr: string): string {
++	if (process.platform !== "win32") return "";
++	if (!/bzip2/i.test(tarStderr) && !/[Ss]ystem32|[Bb]sdtar/.test(tarBin)) return "";
++	return (
++		" Windows' built-in tar (bsdtar) has no built-in bzip2 and deadlocks on its " +
++		"external `bzip2 -d` filter. Extract manually from Git Bash: " +
++		"curl -L <archiveUrl> | tar xj -C \"" + getTtsModelsDir() + "\""
++	);
++}
++
+ /** Spawn `tar -xj -f <archive> -C <stagingDir>` and resolve on exit code 0. */
+-async function runTarExtract(archivePath: string, stagingDir: string, signal?: AbortSignal): Promise<void> {
+-	const tar = spawn("tar", ["-xj", "-f", archivePath, "-C", stagingDir], {
+-		stdio: ["ignore", "ignore", "pipe"],
+-		...(signal ? { signal } : {}),
+-	});
++export async function runTarExtract(archivePath: string, stagingDir: string, signal?: AbortSignal): Promise<void> {
++	const tarBin = resolveTar();
++	// Both the archive and the staging directory live directly in the TTS models
++	// directory (see `archivePath` / `${dir}.staging-<pid>` in ensureTtsModelInstalled).
++	// Pass them as names relative to that directory with cwd set there: MSYS /
++	// Git-for-Windows GNU tar parses an absolute `C:/…` argument with its
++	// remote-archive syntax `[user@]host:file` and fails with
++	// "Cannot connect to C: resolve failed", so absolute Windows paths would make the
++	// GNU tar we deliberately picked unusable. Relative arguments work on every tar.
++	const modelsDir = getTtsModelsDir();
++	const relArchive = path.relative(modelsDir, archivePath).split(path.sep).join("/");
++	const relStaging = path.relative(modelsDir, stagingDir).split(path.sep).join("/");
++	const useRelative =
++		relArchive.length > 0 && !path.isAbsolute(relArchive) && relStaging.length > 0 && !path.isAbsolute(relStaging);
++	const tar = spawn(
++		tarBin,
++		useRelative
++			? ["-xj", "-f", relArchive, "-C", relStaging]
++			: ["-xj", "-f", archivePath, "-C", stagingDir],
++			{
++				stdio: ["ignore", "ignore", "pipe"],
++				...(useRelative ? { cwd: modelsDir } : {}),
++				...(signal ? { signal } : {}),
++			},
++		);
+ 	let tarStderr = "";
+ 	tar.stderr?.on("data", (d: Buffer) => {
+ 		if (tarStderr.length < 1024) tarStderr += d.toString();
+ 	});
+ 	await new Promise<void>((resolve, reject) => {
++		const startedAt = Date.now();
++		let settled = false;
++		let stallTimer: NodeJS.Timeout | undefined;
++		const finish = (fn: () => void) => {
++			if (settled) return;
++			settled = true;
++			if (stallTimer) clearInterval(stallTimer);
++			fn();
++		};
++		stallTimer = setInterval(() => {
++			if (!extractStalled(stagingDir, startedAt, Date.now())) return;
++			finish(() => {
++				try {
++					tar.kill("SIGKILL");
++				} catch {
++					// already gone
++				}
++				reject(
++					new Error(
++						`tar (${tarBin}) made no progress for ${Math.round(EXTRACT_STALL_MS / 1000)}s — killed ` +
++						`to avoid an endless hang.${extractHint(tarBin, tarStderr)}`,
++					),
++				);
++			});
++		}, 1000);
+ 		tar.on("error", (err: NodeJS.ErrnoException) => {
+-			if (err.name === "AbortError" || signal?.aborted) reject(makeAbortErr());
+-			else reject(new Error(`tar failed to start: ${err.message}`));
++			finish(() => {
++				if (err.name === "AbortError" || signal?.aborted) reject(makeAbortErr());
++				else reject(new Error(`tar failed to start: ${err.message}`));
++			});
+ 		});
+ 		tar.on("close", (code, sig) => {
+-			if (code === 0) resolve();
+-			else if (signal?.aborted) reject(makeAbortErr());
+-			else reject(new Error(`tar exited with code ${code}${sig ? ` (${sig})` : ""}: ${tarStderr.trim().slice(-200)}`));
++			finish(() => {
++				if (code === 0) resolve();
++				else if (signal?.aborted) reject(makeAbortErr());
++				else
++					reject(
++						new Error(
++							`tar exited with code ${code}${sig ? ` (${sig})` : ""}: ${tarStderr
++								.trim()
++								.slice(-200)}${extractHint(tarBin, tarStderr)}`,
++						),
++					);
++			});
+ 		});
+ 	});
+ }

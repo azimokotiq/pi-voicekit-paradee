@@ -1,0 +1,10 @@
+
+kitten-nano-en-v0_2 slot=kitten sr=24000 voices=8
+     4 ch →    553 ms, audio 1.02 s, RTF 0.54
+    76 ch →   2433 ms, audio 4.64 s, RTF 0.52
+   215 ch →   6768 ms, audio 13.96 s, RTF 0.48
+
+kokoro-int8-en-v0_19 slot=kokoro sr=24000 voices=11
+     4 ch →   2908 ms, audio 0.57 s, RTF 5.10
+    76 ch →   8994 ms, audio 3.47 s, RTF 2.59
+   215 ch →  23625 ms, audio 10.75 s, RTF 2.20

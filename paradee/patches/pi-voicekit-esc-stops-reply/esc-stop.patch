@@ -1,0 +1,135 @@
+--- orig/voice.ts	2026-10-17 16:22:20.151500200 +0200
++++ fixed/voice.ts	2026-10-17 16:25:02.978938300 +0200
+@@ -249,6 +249,28 @@
+ 	return result;
+ }
+ 
++/**
++ * Mark every queued auto-speak stream as cancelled so [esc] stops the whole
++ * reply instead of only the utterance currently playing.
++ *
++ * pi-voicekit 0.4.2 splits a streaming reply into sentence-sized chunks and
++ * chains them (`state.pending = state.pending.then(() => runSpeak(…))`), while
++ * the playback indicator's stop and /voice-speak-stop only abort the ACTIVE
++ * utterance — so every chunk already queued behind it still starts in turn and
++ * speech "restarts on the next paragraph" however often esc is pressed. Returns
++ * the number of streams whose remaining chunks were dropped.
++ */
++export function cancelMessageStreams(streams: Map<string, { cancelled: boolean }>): number {
++	let dropped = 0;
++	for (const state of streams.values()) {
++		if (!state.cancelled) {
++			state.cancelled = true;
++			dropped++;
++		}
++	}
++	return dropped;
++}
++
+ interface AudioCaptureTool {
+ 	name: string;
+ 	cmd: string;
+@@ -1490,7 +1512,7 @@
+ 		if (_startingRecording) return false; // Prevent overlapping starts during corruption guard sleep
+ 		_startingRecording = true;
+ 
+-		abortActiveSpeak();
++		stopSpeechAndQueuedChunks();
+ 
+ 		try {
+ 			// ── SESSION CORRUPTION GUARD ──
+@@ -1525,7 +1547,7 @@
+ 
+ 	// ── Pre-recording: start capturing audio during warmup so we don't miss words ──
+ 	function startPreRecording() {
+-		abortActiveSpeak();
++		stopSpeechAndQueuedChunks();
+ 		if (preRecordingSession) return; // Already started
+ 		if (config.backend === "local") return; // No pre-recording for local batch mode
+ 		if (!resolveDeepgramApiKey(config)) return; // No key — skip silently
+@@ -2760,8 +2782,28 @@
+ 	interface MessageStreamState {
+ 		spokenLen: number; // chars of accumulated text already queued for speech
+ 		pending: Promise<void>; // chain of in-flight speak() calls — serialize per message
++		/** Set by a user-initiated stop: the rest of this reply stays silent. */
++		cancelled: boolean;
+ 	}
+ 	const messageStreams = new Map<string, MessageStreamState>();
++	// Replies the user stopped, so the legacy turn_end fallback does not re-speak
++	// a message whose streaming state has already been dropped. Bounded FIFO.
++	const cancelledMessageIds = new Set<string>();
++	function markReplyCancelled(id: string): void {
++		cancelledMessageIds.add(id);
++		if (cancelledMessageIds.size > 64) cancelledMessageIds.delete(cancelledMessageIds.values().next().value as string);
++	}
++	/** User-initiated speech stop: kill the active utterance AND the chunks of
++	 *  this reply still queued behind it. Used by [esc], /voice-speak-stop,
++	 *  TTS disable, and by starting a recording (mic-before-speech feedback). */
++	function stopSpeechAndQueuedChunks(): boolean {
++		const dropped = cancelMessageStreams(messageStreams);
++		if (dropped) {
++			for (const id of messageStreams.keys()) markReplyCancelled(id);
++			voiceDebug("speech stop → dropped queued auto-speak chunks", { dropped });
++		}
++		return abortActiveSpeak() || dropped > 0;
++	}
+ 
+ 	const SENTENCE_TERMINATORS = /[.!?](?=\s|$)|[\n]{1,}/g;
+ 
+@@ -2813,9 +2855,11 @@
+ 
+ 		let state = messageStreams.get(messageId);
+ 		if (!state) {
+-			state = { spokenLen: 0, pending: Promise.resolve() };
++			state = { spokenLen: 0, pending: Promise.resolve(), cancelled: false };
+ 			messageStreams.set(messageId, state);
+ 		}
++		// The user stopped this reply — stay silent for the rest of it.
++		if (state.cancelled) return;
+ 
+ 		const newText = fullText.slice(state.spokenLen);
+ 		if (!newText) return;
+@@ -2857,6 +2901,7 @@
+ 		// order, never overlapping for the same message.
+ 		const text = prepared.text;
+ 		state.pending = state.pending.then(async () => {
++			if (state.cancelled) return; // user stopped this reply — drop the remaining chunks
+ 			try {
+ 				if (ctx) await runSpeak(ctx, text);
+ 			} catch {
+@@ -2918,7 +2963,7 @@
+ 		// If message_update already drained this message's stream
+ 		// state, the streaming path handled it — skip.
+ 		const state = messageStreams.get(id);
+-		if (state) return;
++		if (state || cancelledMessageIds.has(id)) return;
+ 		if (voiceState === "warmup" || voiceState === "recording" || voiceState === "finalizing") return;
+ 		const now = Date.now();
+ 		if (now - lastAutoSpeakAt < AUTO_SPEAK_RATE_LIMIT_MS) return;
+@@ -3729,7 +3774,7 @@
+ 					ui: cmdCtx.ui,
+ 					registry,
+ 					ticker,
+-					onStop: () => abortActiveSpeak(),
++					onStop: () => stopSpeechAndQueuedChunks(),
+ 				});
+ 				indicator.setState("playing");
+ 				activePlaybackIndicator = indicator;
+@@ -3852,7 +3897,7 @@
+ 		description: "Stop in-flight TTS playback",
+ 		handler: async (_args, cmdCtx) => {
+ 			ctx = cmdCtx;
+-			if (abortActiveSpeak()) {
++			if (stopSpeechAndQueuedChunks()) {
+ 				cmdCtx.ui.notify("Speech stopped.", "info");
+ 			} else {
+ 				cmdCtx.ui.notify("No active speech.", "info");
+@@ -3867,7 +3912,7 @@
+ 			const nowEnabling = !config.ttsEnabled;
+ 			config.ttsEnabled = nowEnabling;
+ 			saveConfig(config, config.scope === "project" ? "project" : "global", currentCwd, { loadedSource: configSource });
+-			if (!nowEnabling) abortActiveSpeak();
++			if (!nowEnabling) stopSpeechAndQueuedChunks();
+ 			cmdCtx.ui.notify(`TTS ${nowEnabling ? "enabled" : "disabled"}.`, "info");
+ 			// First-time enable → v7.1 §9 rich onboarding overlay with
+ 			// three explicit actions (try / pick model / skip).

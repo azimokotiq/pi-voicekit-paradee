@@ -1,0 +1,18 @@
+length sweep (one call each):
+     4 ch →   3273 ms, audio 0.64 s, RTF 5.09
+    76 ch →   9086 ms, audio 3.53 s, RTF 2.58
+   152 ch →  17734 ms, audio 7.37 s, RTF 2.41
+   215 ch →  24717 ms, audio 10.56 s, RTF 2.34
+   298 ch →  33835 ms, audio 14.70 s, RTF 2.30
+
+one multi-sentence call vs four separate calls:
+  joined   298 ch →  33795 ms, audio 14.71 s
+  4 calls          →  36078 ms synth total, wall 36078 ms
+
+time to FIRST sentence if playback streamed via onProgress:
+  whole call 33839 ms, audio 14.706375 s, progress callbacks: 0
+
+speed effect (same text):
+  speed 1 →  40146 ms, audio 17.22 s
+  speed 1.25 →  33607 ms, audio 14.71 s
+  speed 1.6 →  24776 ms, audio 11.12 s

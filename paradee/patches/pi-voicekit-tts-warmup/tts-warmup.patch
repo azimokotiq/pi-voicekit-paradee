@@ -1,0 +1,88 @@
+--- a/extensions/voice.ts
++++ b/extensions/voice.ts
+@@ -271,6 +271,54 @@
+ 	return dropped;
+ }
+ 
++/**
++ * Warm the configured local TTS model in the background so the first spoken
++ * reply of a session does not pay model load.
++ *
++ * pi-voicekit 0.4.2 exports `warmupTts()` from voice/tts-engine.ts but never
++ * calls it, so the first `speak()` of every process includes ONNX session
++ * creation, graph optimisation and the first G2P load: measured +4.1 s for
++ * Paradee-8M and +1.9 s for Kokoro-int8 on the same machine, against RTF 0.08
++ * for every utterance after that. The whole latency penalty is one hidden load.
++ *
++ * Best-effort by design: never throws, never blocks the caller, and an
++ * unattempted/failed model is dropped from the Set so a later attempt (or a
++ * model switch) can still warm. Mirrors what upstream already does for the
++ * punctuation engine at session_start — "no dictation ever waits for a
++ * background build" — applied to speech output.
++ *
++ * `getConfig` is a thunk because `config` is reassigned on every session_start
++ * and settings save; a captured value would be stale.
++ */
++const ttsWarmupAttempted = new Set<string>();
++export async function warmupSelectedTts(getConfig: () => VoiceConfig, reason: string): Promise<boolean> {
++	const cfg = getConfig();
++	if (!cfg || cfg.ttsEnabled !== true) return false;
++	if ((cfg.ttsBackend ?? "local") !== "local") return false; // cloud TTS has nothing to warm
++	const modelId = cfg.ttsLocalModel || "kitten-nano-en-v0_2";
++	if (ttsWarmupAttempted.has(modelId)) return false;
++	ttsWarmupAttempted.add(modelId);
++	try {
++		const { getTtsModel, isTtsModelInstalled, getInstalledTtsModelDir } = await import(
++			"./voice/tts-local-models"
++		);
++		if (!isTtsModelInstalled(modelId)) {
++			ttsWarmupAttempted.delete(modelId); // not fetched yet — a later attempt may find it
++			return false;
++		}
++		const { warmupTts } = await import("./voice/tts-engine");
++		const t0 = Date.now();
++		const ok = await warmupTts(getTtsModel(modelId), getInstalledTtsModelDir(modelId));
++		voiceDebug("tts warmup", { reason, modelId, ok, ms: Date.now() - t0 });
++		if (!ok) ttsWarmupAttempted.delete(modelId);
++		return ok;
++	} catch (err) {
++		ttsWarmupAttempted.delete(modelId);
++		voiceDebug("tts warmup failed", { reason, error: safeErrorText(err) });
++		return false;
++	}
++}
++
+ interface AudioCaptureTool {
+ 	name: string;
+ 	cmd: string;
+@@ -1265,6 +1313,10 @@
+ 		const validated = isLocal || hasKey;
+ 		config = finalizeOnboardingConfig(nextConfig, { validated, source });
+ 		configSource = selectedScope;
++		// A model picked in the settings panel should be resident before the
++		// next reply; the Set inside warmupSelectedTts keys on model id, so this
++		// only does work when the selection actually changed.
++		void warmupSelectedTts(() => config, "settings-save");
+ 		const savedPath = saveConfig(config, selectedScope, currentCwd, { loadedSource: configSource });
+ 		const statusHeader = validated
+ 			? "Voice setup complete."
+@@ -2608,6 +2660,11 @@
+ 			preparePunctuation({ onTransfer: notifyPunctuationDownload });
+ 		}
+ 
++		// Same rationale one line below for the recogniser's punctuation engine,
++		// applied to speech output: pay the TTS model load while the user is
++		// still typing their first message instead of inside their first reply.
++		void warmupSelectedTts(() => config, "session_start");
++
+ 		// v7.1.3 — version banner emitted to debug log on every session
+ 		// start. Lets users / support verify which extension build is
+ 		// actually loaded after a `pi install .` (path-installed
+@@ -3913,6 +3970,7 @@
+ 			config.ttsEnabled = nowEnabling;
+ 			saveConfig(config, config.scope === "project" ? "project" : "global", currentCwd, { loadedSource: configSource });
+ 			if (!nowEnabling) stopSpeechAndQueuedChunks();
++			if (nowEnabling) void warmupSelectedTts(() => config, "speak-toggle");
+ 			cmdCtx.ui.notify(`TTS ${nowEnabling ? "enabled" : "disabled"}.`, "info");
+ 			// First-time enable → v7.1 §9 rich onboarding overlay with
+ 			// three explicit actions (try / pick model / skip).

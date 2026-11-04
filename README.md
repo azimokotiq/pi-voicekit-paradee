@@ -2,6 +2,14 @@
 
 # pi-voicekit
 
+> **This tree is the `paradee-voice` fork of pi-voicekit v0.4.2.** It adds the
+> [Paradee-8M](https://github.com/sahilmahendrakar/paradee) local TTS backend — Kokoro's `af_heart`
+> voice distilled to 8.07M parameters, warm **RTF 0.09** where Kokoro measures 2.2 — plus the seven
+> voice fixes that made it usable (warm-up, no double narration, stop-queued-chunks, speak-on-demand,
+> Windows mic pick, download retry). Eight commits on top of the `v0.4.2` tag, nothing else changed.
+> **Read [`paradee/README.md`](paradee/README.md)** for the numbers, the load-order constraint and
+> the install; `paradee/patches/` holds the same changes as re-appliable patches.
+
 > **Community continuation of [`codexstar69/pi-listen`](https://github.com/codexstar69/pi-listen)** (upstream, MIT — dormant since v7.2.2 in May 2026).
 > Not affiliated with the original author. Old name: `pi-listen`.
 
