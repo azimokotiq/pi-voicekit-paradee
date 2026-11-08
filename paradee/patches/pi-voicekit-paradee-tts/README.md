@@ -1,8 +1,9 @@
 # pi-voicekit patch: Paradee-8M TTS backend
 
 **Adds Paradee (https://github.com/sahilmahendrakar/paradee) as a local TTS
-model — Kokoro's `af_heart` voice distilled to 8.07M parameters in one 9 MB
-int8 ONNX file.** Apache-2.0.
+model — in v1.2, four of Kokoro's voices (`af_heart`, `bf_isabella`, `am_puck`,
+`bm_fable`) distilled to 8.07M parameters in one 8.5 MB int8 ONNX file, with a
+scalar int64 `voice` input that picks the speaker.** Apache-2.0.
 
 ## Measured on this machine (Windows/x64, 12 logical CPUs)
 
@@ -24,8 +25,8 @@ Parakeet-v3 ASR: **WER 5.6 %** over 54 words (misses were "DirectShow" →
 sherpa-onnx's `kokoro` slot takes **text**, phonemizes internally with
 `espeak-ng-data`, and mixes a `voices.bin` speaker embedding. Paradee's graph is
 `input_ids` (int64 `[1,T]` misaki phoneme ids, `0` pad at both ends, ≤512
-positions) + `speed` (float32 `[1]`) → `waveform` (float32 `[1, N]` @24 kHz),
-one voice baked in. It cannot be expressed as an `OfflineTts` slot, so
+positions) + `speed` (float32 `[1]`) → `waveform` (float32 `[1, N]` @24 kHz), and
+in v1.2 a scalar int64 `voice` input (`[1]`) selects the speaker. It cannot be expressed as an `OfflineTts` slot, so
 `extensions/voice/tts-paradee.ts` drives `onnxruntime-node` directly.
 
 G2P: `phonemizer` (eSpeak NG compiled to wasm — the same package kokoro-js

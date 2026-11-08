@@ -6,8 +6,8 @@
 # generating a reply takes 2-5x as long as listening to it (298 chars = 33.8 s),
 # and sherpa's numThreads makes almost no difference (2.36 -> 2.21 across 2..12
 # threads; Kokoro's transformer encoder does not scale here). Paradee-8M
-# (https://github.com/sahilmahendrakar/paradee) is Kokoro's af_heart voice
-# distilled to 8.07M parameters in one 9 MB int8 ONNX file: RTF 0.12 on ONE
+# (https://github.com/sahilmahendrakar/paradee) distils Kokoro's voices into
+# 8.07M parameters in one 8.5 MB int8 ONNX file: RTF 0.12 on ONE
 # thread, 0.07 on four — the same 298-character reply in 1.4 s — at UTMOS 4.41
 # vs Kokoro's 4.52 and the same WER. Transcribing Paradee's output with the
 # local Parakeet-v3 ASR gives 5.6% WER against the source text, so it is not
