@@ -3,11 +3,12 @@
 # pi-voicekit
 
 > **This tree is the `paradee-voice` fork of pi-voicekit v0.4.2.** It adds the
-> [Paradee-8M](https://github.com/sahilmahendrakar/paradee) local TTS backend — Kokoro's `af_heart`
-> voice distilled to 8.07M parameters, warm **RTF 0.09** where Kokoro measures 2.2 — plus the seven
+> [Paradee-8M](https://github.com/sahilmahendrakar/paradee) local TTS backend — Kokoro's voices
+> distilled to 8.07M parameters, in v1.2 four of them in one 8.5 MB file (`af_heart`, `bf_isabella`,
+> `am_puck`, `bm_fable`), warm **RTF 0.09** where Kokoro measures 2.2 — plus the seven
 > voice fixes that made it usable (warm-up, no double narration, stop-queued-chunks, speak-on-demand,
-> Windows mic pick, download retry). Eight commits of source changes on top of the `v0.4.2` tag —
-> 9 files, +1503/−145 — plus the documentation and patch set in `paradee/`.
+> Windows mic pick, download retry). Twelve commits of source changes on top of the `v0.4.2` tag,
+> plus the documentation and patch set in `paradee/`.
 > **Read [`paradee/README.md`](paradee/README.md)** for the numbers, the load-order constraint and
 > the install; `paradee/patches/` holds the same changes as re-appliable patches.
 
@@ -33,7 +34,7 @@ speaks the agent's replies (Kitten, Kokoro, Piper, or Deepgram Aura).
 > **v0.1.3 — current release** — audio capture prefers `ffmpeg` when
 > `PULSE_SERVER` is set (SSH audio tunnel / remote PulseAudio), so remote
 > microphones record reliably. Voice in **and** voice out: 21 offline STT models,
-> 20 local TTS voices plus Deepgram Aura, driven by one `/voice-settings` panel
+> 20 local TTS voices plus Paradee's four and Deepgram Aura, driven by one `/voice-settings` panel
 > with 5 tabs. The 0.1.x line is documented in the [changelog](CHANGELOG.md).
 
 ---
@@ -135,7 +136,7 @@ See what's installed, total disk usage, and which model is active. Press Enter t
 
 ### Speak — TTS models and voices
 
-Pick a TTS backend (local sherpa-onnx or Deepgram Aura), browse 20 local voices
+Pick a TTS backend (local sherpa-onnx, Paradee, or Deepgram Aura), browse 20 local voices
 from ~13 MB, download on selection, and choose a voice per backend. Auto-speak of
 agent replies is toggled here.
 
@@ -374,7 +375,7 @@ extensions/voice/punctuation-model.ts       Punctuation model — catalogue, dig
 extensions/voice/speak.ts                   Speak entry point, auto-speak wiring
 extensions/voice/tts-engine.ts              sherpa-onnx TTS synthesis
 extensions/voice/tts-deepgram.ts            Deepgram Aura voices (cloud)
-extensions/voice/tts-local-models.ts        Local TTS catalog — 20 voices (Kitten, Kokoro, Piper)
+extensions/voice/tts-local-models.ts        Local TTS catalog — 20 voices (Kitten, Kokoro, Piper) + Paradee's 4
 extensions/voice/tts-playback.ts            Playback, buffering, player detection
 extensions/voice/tts-text-filter.ts         Code-block stripping, sentence prep
 extensions/voice/tts-onboarding.ts          TTS onboarding flow
