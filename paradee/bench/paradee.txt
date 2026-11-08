@@ -1,18 +1,19 @@
-session inputs=["input_ids","speed"] outputs=["waveform"] load 3367 ms
+model=paradee-8m-v1_2 file=paradee_int8.onnx sha256=a6989796692ac173… voices=["af_heart","bf_isabella","am_puck","bm_fable"]
+session inputs=["input_ids","speed","voice"] outputs=["waveform"] load 1046 ms
 
 threads=1
-     4 ch →   129 ms, audio 0.95 s, RTF 0.136
+     4 ch →    50 ms, audio 1.02 s, RTF 0.049
     g2p raw="jˈɛs" misaki="jˈɛs"
-    wav peak=0.287 samples=22800
-    76 ch →   554 ms, audio 4.92 s, RTF 0.112
-    wav peak=0.309 samples=118200
-   152 ch →  1131 ms, audio 10.15 s, RTF 0.111
-    wav peak=0.346 samples=243600
-   298 ch →  2173 ms, audio 18.25 s, RTF 0.119
-    wav peak=0.340 samples=438000
+    wav peak=0.294 samples=24600
+    76 ch →   207 ms, audio 4.85 s, RTF 0.043
+    wav peak=0.362 samples=116400
+   152 ch →   415 ms, audio 9.75 s, RTF 0.043
+    wav peak=0.578 samples=234000
+   298 ch →   787 ms, audio 18.93 s, RTF 0.042
+    wav peak=0.401 samples=454200
 
 threads=4
-     4 ch →    75 ms, audio 0.95 s, RTF 0.079
-    76 ch →   332 ms, audio 4.92 s, RTF 0.067
-   152 ch →   729 ms, audio 10.15 s, RTF 0.072
-   298 ch →  1362 ms, audio 18.25 s, RTF 0.075
+     4 ch →    37 ms, audio 1.02 s, RTF 0.036
+    76 ch →   115 ms, audio 4.85 s, RTF 0.024
+   152 ch →   231 ms, audio 9.75 s, RTF 0.024
+   298 ch →   400 ms, audio 18.93 s, RTF 0.021

@@ -1,18 +1,22 @@
 // Paradee-8M end-to-end probe: eSpeak(js) phonemes -> misaki table -> token ids -> ONNX -> wav.
 // Proves the pipeline works on Windows and measures RTF against the kokoro/kitten numbers.
-// Run: node ~/ttsdbg/probe_paradee.mjs
+// Run: node paradee/bench/probe_paradee.mjs > paradee/bench/paradee.txt
+// (the four paradee_*ch.wav files next to this script are this probe's output)
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { pathToFileURL } from "node:url";
+import crypto from "node:crypto";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 
 const require = createRequire(path.join(os.homedir(), ".pi", "agent", "npm", "noop.cjs"));
 const ort = require("onnxruntime-node");
 const { phonemize } = require("phonemizer");
-const { toMisaki } = await import(pathToFileURL(path.join(os.homedir(), "ttsdbg", "misaki.js")).href);
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const { toMisaki } = await import(pathToFileURL(path.join(HERE, "misaki.js")).href);
 
-const DIR = path.join(os.homedir(), ".pi", "models", "tts", "paradee-8m-v1_0");
+// v1.2 is the model this fork ships. Set PARADEE_MODEL_DIR to measure another.
+const DIR = process.env.PARADEE_MODEL_DIR || path.join(os.homedir(), ".pi", "models", "tts", "paradee-8m-v1_2");
 const vocab = JSON.parse(fs.readFileSync(path.join(DIR, "config.json"), "utf8")).vocab;
 const SR = 24000;
 const MAX = 510;
@@ -40,12 +44,15 @@ function toIds(phonemes) {
 	return { ids: [0, ...ids, 0], dropped: [...dropped] };
 }
 
-async function synth(s, phonemes, speed = 1.0) {
+async function synth(s, phonemes, speed = 1.0, voice = 0) {
 	const { ids, dropped } = toIds(phonemes);
 	const feeds = {
 		input_ids: new ort.Tensor("int64", BigInt64Array.from(ids.map(BigInt)), [1, ids.length]),
 		speed: new ort.Tensor("float32", new Float32Array([speed]), [1]),
 	};
+	// v1.2 added a scalar int64 `voice` input; v1.0 has no such input and af_heart
+	// is baked into the weights, so feeding it is version-dependent.
+	if (s.inputNames.includes("voice")) feeds.voice = new ort.Tensor("int64", BigInt64Array.from([BigInt(voice)]), [1]);
 	const t0 = t();
 	const out = await s.run(feeds);
 	const wave = out[s.outputNames[0]].data;
@@ -88,12 +95,24 @@ const S4 = "Input gain is low, so raising the Windows mic level gives the model 
 const g2pCache = new Map();
 async function phonemes(text) {
 	if (g2pCache.has(text)) return g2pCache.get(text);
-	const parts = await phonemize(text, "en-us");
+	const parts = await phonemize(text, ACCENT);
 	const raw = parts.join(" ");
 	const mis = toMisaki(raw);
 	g2pCache.set(text, { raw, mis });
 	return g2pCache.get(text);
 }
+
+const VOICES = JSON.parse(fs.readFileSync(path.join(DIR, "config.json"), "utf8")).voices ?? ["af_heart"];
+// Which voice to measure: index into the model's own list. The G2P accent follows
+// the voice's prefix because Paradee is trained that way (af_/am_ = misaki
+// American, bf_/bm_ = misaki British).
+const SID = Number(process.env.PARADEE_VOICE ?? 0);
+const VOICE = VOICES[SID] ?? String(SID);
+const ACCENT = process.env.PARADEE_ACCENT || (/^(bf_|bm_)/.test(VOICE) ? "en-gb" : "en-us");
+const WAVSUFFIX = SID === 0 ? "" : `_${VOICE}`;
+const sha = crypto.createHash("sha256").update(fs.readFileSync(path.join(DIR, "paradee_int8.onnx"))).digest("hex");
+console.log(`model=${path.basename(DIR)} file=paradee_int8.onnx sha256=${sha.slice(0, 16)}… voices=${JSON.stringify(VOICES)}`);
+console.log(`voice=sid ${SID} ${VOICE} g2p=${ACCENT}  (phonemizer latches its accent at the first call, so one process measures one accent)`);
 
 for (const threads of [1, 4]) {
 	const { s, loadMs, inputs, outputs } = await makeSession(threads);
@@ -101,13 +120,13 @@ for (const threads of [1, 4]) {
 	console.log(`\nthreads=${threads}`);
 	for (const text of ["Yes.", S1, S1 + " " + S2, S1 + " " + S2 + " " + S3 + " " + S4]) {
 		const g = await phonemes(text);
-		const r = await synth(s, g.mis);
+		const r = await synth(s, g.mis, 1.0, SID);
 		console.log(
 			`  ${String(text.length).padStart(4)} ch → ${String(r.ms).padStart(5)} ms, audio ${r.dur.toFixed(2)} s, RTF ${(r.ms / 1000 / r.dur).toFixed(3)}${r.dropped.length ? ` dropped=${JSON.stringify(r.dropped)}` : ""}`,
 		);
 		if (threads === 1) {
 			if (text === "Yes.") console.log(`    g2p raw=${JSON.stringify(g.raw)} misaki=${JSON.stringify(g.mis)}`);
-			const peak = writeWav(path.join(os.homedir(), "ttsdbg", `paradee_${text.length}ch.wav`), r.wave, SR);
+			const peak = writeWav(path.join(HERE, `paradee_${text.length}ch${WAVSUFFIX}.wav`), r.wave, SR);
 			console.log(`    wav peak=${peak.toFixed(3)} samples=${r.wave.length}`);
 		}
 	}

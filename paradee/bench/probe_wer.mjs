@@ -1,13 +1,16 @@
 // Objective intelligibility check on the Paradee WAVs: transcribe with the SAME local
 // ASR pi-voicekit uses (parakeet-v3 transducer) and score WER against the source text.
-// Run: node ~/ttsdbg/probe_wer.mjs
+// Run: node paradee/bench/probe_wer.mjs > paradee/bench/wer.txt
+// (the wavs it scores are probe_paradee.mjs's output, next to this script)
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 const require = createRequire(path.join(os.homedir(), ".pi", "agent", "npm", "noop.cjs"));
 const sherpa = require("sherpa-onnx-node");
 
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DIR = path.join(os.homedir(), ".pi", "models", "parakeet-v3");
 
 function readWav(file) {
@@ -46,13 +49,24 @@ const rec = new sherpa.OfflineRecognizer({
 	},
 });
 
+const LONG =
+	"Your microphone is fixed now, and it was never a permissions problem at all. The extension asked DirectShow for a device that does not exist on Windows. Restart pi and try push to talk again with the usual shortcut. Input gain is low, so raising the Windows mic level gives the model more headroom.";
+const MID =
+	"Your microphone is fixed now, and it was never a permissions problem at all. The extension asked DirectShow for a device that does not exist on Windows.";
 const CASES = [
-	["paradee_152ch.wav", "Your microphone is fixed now, and it was never a permissions problem at all. The extension asked DirectShow for a device that does not exist on Windows."],
-	["paradee_298ch.wav", "Your microphone is fixed now, and it was never a permissions problem at all. The extension asked DirectShow for a device that does not exist on Windows. Restart pi and try push to talk again with the usual shortcut. Input gain is low, so raising the Windows mic level gives the model more headroom."],
+	["paradee_152ch.wav", MID],
+	["paradee_298ch.wav", LONG],
+	// Paradee v1.2's British voice, phonemized in en-gb. Parakeet-v3 is an American
+	// model, so it hears a British accent as an accent: these numbers over-state the
+	// errors more than they do for the American rows.
+	["paradee_152ch_bf_isabella.wav", MID],
+	["paradee_298ch_bf_isabella.wav", LONG],
 ];
 
+console.log(`ASR=parakeet-v3 (nemo transducer, American English) — a British accent is scored by an American model, so the British rows over-state their errors.`);
+
 for (const [f, ref] of CASES) {
-	const file = path.join(os.homedir(), "ttsdbg", f);
+	const file = path.join(HERE, f);
 	if (!fs.existsSync(file)) { console.log(`${f}: missing`); continue; }
 	const wav = readWav(file);
 	const stream = rec.createStream();

@@ -341,13 +341,15 @@ export async function synthesize(opts: SynthesizeOpts): Promise<TtsAudio> {
 		//    abort wiring and the NaN guard below still apply, but the sherpa
 		//    loader and the OfflineTts cache are bypassed entirely.
 		if (model.backend === "paradee") {
+			const sid = clampSid(opts.sid ?? model.defaultSid, model);
 			const audio = await synthesizeParadee({
 				modelDir,
 				text,
 				speed: clampSpeed(opts.speed ?? 1.0),
-				// Paradee is a single American-English voice (af_heart); map any
-				// en-* tag onto the eSpeak-ng voice its G2P was validated with.
-				language: language.startsWith("en") ? "en-us" : language,
+				// The sid is the graph's `voice` input, and each voice was trained
+				// with one misaki dictionary: the backend derives en-us vs en-gb
+				// from the voice name, so the ttsLanguage tag must not override it.
+				voice: sid,
 				signal,
 				threads: getTtsThreads(model.sherpaSlot),
 			});

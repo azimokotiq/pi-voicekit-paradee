@@ -22,23 +22,33 @@
 # eSpeak phonemes the model mumbles (upstream reports Whisper WER 31% vs 3%).
 #
 # Files:
-#   fixed/tts-paradee.ts        new module (backend + vendored misaki table)
+#   fixed/tts-paradee.ts            new module (backend + vendored misaki table)
+#   fixed/paradee-g2p-worker.mjs    new module (per-accent eSpeak child process)
 #   paradee-tts-local-models.patch  catalog entry, files[] installer, install marker
 #   paradee-tts-engine.patch        backend dispatch in synthesize()/warmupTts()
 #   package.json.patch              onnxruntime-node + phonemizer as optional deps
+#
+# Tested against pi-voicekit 0.4.2 (latest on npm as of 2026-10-17) with
+# Paradee-8M v1.2 (sahilmahendrakar/Paradee-8M-v1.2, onnx/paradee_int8.onnx,
+# sha256 a6989796692ac173597e15d405c971989202d5c73cfad65f22e90bd7b6c97da1) and
+# onnxruntime-node 1.26.0. v1.2 added bf_isabella + bm_fable, which speak
+# British English, and a scalar int64 `voice` input that selects the speaker —
+# v1.0 baked af_heart into the weights and takes no such input.
 #
 # pi-voicekit lives in node_modules, so pi-auto-update wipes this patch on the
 # next version bump (tested against 0.4.2, latest on npm as of 2026-10-17).
 # Re-run after any bump: bash ~/.pi/agent/patches/pi-voicekit-paradee-tts/apply.sh
 # If upstream ships Paradee itself (check for "paradee" in
 # extensions/voice/tts-engine.ts) this script does nothing.
+# Set PI_VOICEKIT_DIR to apply to a copy elsewhere (used by the kit's own test).
 set -u -o pipefail
-PKG="$HOME/.pi/agent/npm/node_modules/pi-voicekit"
+PKG="${PI_VOICEKIT_DIR:-$HOME/.pi/agent/npm/node_modules/pi-voicekit}"
 NPM="$HOME/.pi/agent/npm"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 MODELS="extensions/voice/tts-local-models.ts"
 ENGINE="extensions/voice/tts-engine.ts"
 PARADEE="extensions/voice/tts-paradee.ts"
+G2P="extensions/voice/paradee-g2p-worker.mjs"
 SHLOADER="extensions/voice/sherpa-loader.ts"
 PKGJSON="package.json"
 
@@ -58,6 +68,7 @@ else
 		fi
 	done
 	cp "$HERE/fixed/tts-paradee.ts" "$PKG/$PARADEE" && echo "installed $PARADEE"
+	cp "$HERE/fixed/paradee-g2p-worker.mjs" "$PKG/$G2P" && echo "installed $G2P"
 
 	for target in "$MODELS" "$ENGINE" "$PARADEE" "$SHLOADER"; do
 		node -e '
@@ -81,12 +92,18 @@ else
 	echo "$SHLOADER already primes onnxruntime-node"
 fi
 
-# tts-paradee.ts is a whole new module, not a patch hunk: keep the deployed copy
-# byte-identical to fixed/ even when the hunks above were already applied, so a
-# fix to the module still reaches a live install.
-if [ -f "$PKG/$PARADEE" ] && ! cmp -s "$HERE/fixed/tts-paradee.ts" "$PKG/$PARADEE"; then
-	cp "$HERE/fixed/tts-paradee.ts" "$PKG/$PARADEE" && echo "re-synced $PARADEE (module changed since it was installed)"
-fi
+# tts-paradee.ts and the G2P worker are whole new modules, not patch hunks: keep
+# the deployed copies byte-identical to fixed/ even when the hunks above were
+# already applied, so a fix still reaches a live install.
+for pair in "$PARADEE:tts-paradee.ts" "$G2P:paradee-g2p-worker.mjs"; do
+	target="${pair%%:*}"; src="${pair##*:}"
+	if [ -f "$PKG/$target" ] && ! cmp -s "$HERE/fixed/$src" "$PKG/$target"; then
+		cp "$HERE/fixed/$src" "$PKG/$target" && echo "re-synced $target (module changed since it was installed)"
+	fi
+done
+
+# The worker is plain ESM, so the TypeScript strip above does not cover it.
+node --check "$PKG/$G2P" && echo "parse ok: $G2P" || exit 1
 
 # Runtime deps: Paradee needs onnxruntime-node + phonemizer resolvable from the
 # package directory. Install them into the harness npm root if absent.

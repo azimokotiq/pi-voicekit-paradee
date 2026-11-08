@@ -1,16 +1,33 @@
+ASR=parakeet-v3 (nemo transducer, American English) — a British accent is scored by an American model, so the British rows over-state their errors.
 D:\a\sherpa-onnx\sherpa-onnx\sherpa-onnx\csrc\offline-stream.cc:AcceptWaveformImpl:146 Creating a resampler:
    in_sample_rate: 24000
    output_sample_rate: 16000
 
 
-paradee_152ch.wav (10.2s) WER 11.1% over 27 words
+paradee_152ch.wav (9.8s) WER 11.1% over 27 words
   REF: Your microphone is fixed now, and it was never a permissions problem at all. The extension asked DirectShow for a device that does not exist on Windows.
-  HYP: Your microphone is fixed now, and it was never a permissions problem, at all the extension, ask direct show for a device that does not exist on Windows.
+  HYP: Your microphone is fixed now, and it was never a permissions problem, at all the extension asked direct show for device that does not exist on Windows.
 D:\a\sherpa-onnx\sherpa-onnx\sherpa-onnx\csrc\offline-stream.cc:AcceptWaveformImpl:146 Creating a resampler:
    in_sample_rate: 24000
    output_sample_rate: 16000
 
 
-paradee_298ch.wav (18.3s) WER 5.6% over 54 words
+paradee_298ch.wav (18.9s) WER 7.4% over 54 words
   REF: Your microphone is fixed now, and it was never a permissions problem at all. The extension asked DirectShow for a device that does not exist on Windows. Restart pi and try push to talk again with the usual shortcut. Input gain is low, so raising the Windows mic level gives the model more headroom.
-  HYP: Your microphone is fixed now, and it was never a permissions problem, at all the extension, ask direct show for a device that does not exist on Windows restart Pi, and try push to talk again with the usual shortcut input gain is low, so raising the Windows mic level gives the model more headroom.
+  HYP: Your microphone is fixed now, and it was never a permissions problem at all. The extension Ask Direct Shofer device that does not exist on Windows Restart Pi, and try push to talk again, with the usual shortcut input gain, is low, so raising the Windows mic level gives the model more headroom.
+D:\a\sherpa-onnx\sherpa-onnx\sherpa-onnx\csrc\offline-stream.cc:AcceptWaveformImpl:146 Creating a resampler:
+   in_sample_rate: 24000
+   output_sample_rate: 16000
+
+
+paradee_152ch_bf_isabella.wav (9.1s) WER 11.1% over 27 words
+  REF: Your microphone is fixed now, and it was never a permissions problem at all. The extension asked DirectShow for a device that does not exist on Windows.
+  HYP: Your microphone is fixed now, and it was never a permissions problem at all. The extension Ask Direct show for a device that does not exist on Windows.
+D:\a\sherpa-onnx\sherpa-onnx\sherpa-onnx\csrc\offline-stream.cc:AcceptWaveformImpl:146 Creating a resampler:
+   in_sample_rate: 24000
+   output_sample_rate: 16000
+
+
+paradee_298ch_bf_isabella.wav (17.6s) WER 9.3% over 54 words
+  REF: Your microphone is fixed now, and it was never a permissions problem at all. The extension asked DirectShow for a device that does not exist on Windows. Restart pi and try push to talk again with the usual shortcut. Input gain is low, so raising the Windows mic level gives the model more headroom.
+  HYP: Your microphone is fixed now, and it was never a permissions problem at all the extension, Ask Direct Show for a device that does not exist on Windows RestartPi, and try push to talk again with the usual shortcut input gain, is low so raising the Windows mic level gives the model more headroom.

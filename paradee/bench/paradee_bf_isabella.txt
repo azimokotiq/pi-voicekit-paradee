@@ -1,0 +1,20 @@
+model=paradee-8m-v1_2 file=paradee_int8.onnx sha256=a6989796692ac173… voices=["af_heart","bf_isabella","am_puck","bm_fable"]
+voice=sid 1 bf_isabella g2p=en-gb  (phonemizer latches its accent at the first call, so one process measures one accent)
+session inputs=["input_ids","speed","voice"] outputs=["waveform"] load 1024 ms
+
+threads=1
+     4 ch →    52 ms, audio 1.10 s, RTF 0.047
+    g2p raw="jˈɛs" misaki="jˈɛs"
+    wav peak=0.571 samples=26400
+    76 ch →   203 ms, audio 4.75 s, RTF 0.043
+    wav peak=0.675 samples=114000
+   152 ch →   367 ms, audio 9.10 s, RTF 0.040
+    wav peak=0.721 samples=218400
+   298 ch →   725 ms, audio 17.63 s, RTF 0.041
+    wav peak=0.662 samples=423000
+
+threads=4
+     4 ch →    36 ms, audio 1.10 s, RTF 0.033
+    76 ch →   106 ms, audio 4.75 s, RTF 0.022
+   152 ch →   195 ms, audio 9.10 s, RTF 0.021
+   298 ch →   378 ms, audio 17.63 s, RTF 0.021

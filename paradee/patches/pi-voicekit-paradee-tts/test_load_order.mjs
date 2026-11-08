@@ -66,7 +66,7 @@ if (ROLE === "safe-order" || ROLE === "raw-sherpa") {
 
 	if (ROLE === "raw-sherpa") {
 		try {
-			await run("paradee-8m-v1_0", 50000);
+			await run("paradee-8m-v1_2", 50000);
 			console.log("UNEXPECTED: Paradee loaded even after a raw sherpa require()");
 			process.exit(1);
 		} catch (err) {
@@ -79,7 +79,7 @@ if (ROLE === "safe-order" || ROLE === "raw-sherpa") {
 	}
 
 	console.log(`2. sherpa backend real inference: ${await run("kitten-nano-en-v0_2", 20000)}`);
-	console.log(`3. paradee backend real inference: ${await run("paradee-8m-v1_0", 50000)}`);
+	console.log(`3. paradee backend real inference: ${await run("paradee-8m-v1_2", 50000)}`);
 	console.log("SAFE ORDER (pi's order) — BOTH ONNX RUNTIMES COEXIST: PASS");
 	process.exit(0);
 }

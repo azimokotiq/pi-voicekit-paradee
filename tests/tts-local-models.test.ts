@@ -27,6 +27,21 @@ describe("TTS_LOCAL_MODELS catalog shape", () => {
 
 	test("every archive URL is HTTPS to a verified host", () => {
 		for (const m of TTS_LOCAL_MODELS) {
+			if (m.files) {
+				// Direct-file models (Paradee) ship loose files from the author's own
+				// Hugging Face repo instead of a sherpa release archive, so the
+				// integrity pin is what has to carry the trust.
+				expect(m.archiveUrl.startsWith("https://huggingface.co/")).toBe(true);
+				const models = m.files.filter((f) => f.target.endsWith(".onnx"));
+				expect(models.length).toBeGreaterThan(0);
+				for (const f of m.files) {
+					expect(f.url.startsWith("https://huggingface.co/")).toBe(true);
+					expect(f.target).not.toContain("..");
+					expect(f.sizeBytes).toBeGreaterThan(0);
+				}
+				for (const f of models) expect(f.sha256).toMatch(/^[0-9a-f]{64}$/);
+				continue;
+			}
 			expect(m.archiveUrl.startsWith("https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/")).toBe(true);
 			expect(m.archiveUrl.endsWith(".tar.bz2")).toBe(true);
 		}

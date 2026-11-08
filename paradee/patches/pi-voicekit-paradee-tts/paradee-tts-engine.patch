@@ -1,5 +1,5 @@
---- orig/tts-engine.ts	2026-10-17 16:47:44.000142100 +0200
-+++ fixed/tts-engine.ts	2026-10-17 16:54:15.309732600 +0200
+--- orig/tts-engine.ts	2026-11-04 21:13:31.785476500 +0100
++++ fixed/tts-engine.ts	2026-11-08 16:17:56.579156900 +0100
 @@ -46,6 +46,7 @@
  import * as fs from "node:fs";
  import { loadSherpa, getSherpaModule, getSherpaError, isSherpaAvailable } from "./sherpa-loader";
@@ -29,7 +29,7 @@
  	try {
  		const ok = await loadSherpa();
  		if (!ok) return false;
-@@ -327,14 +335,35 @@
+@@ -327,14 +335,37 @@
  			throw makeAbortError();
  		}
  
@@ -40,13 +40,15 @@
 +		//    abort wiring and the NaN guard below still apply, but the sherpa
 +		//    loader and the OfflineTts cache are bypassed entirely.
 +		if (model.backend === "paradee") {
++			const sid = clampSid(opts.sid ?? model.defaultSid, model);
 +			const audio = await synthesizeParadee({
 +				modelDir,
 +				text,
 +				speed: clampSpeed(opts.speed ?? 1.0),
-+				// Paradee is a single American-English voice (af_heart); map any
-+				// en-* tag onto the eSpeak-ng voice its G2P was validated with.
-+				language: language.startsWith("en") ? "en-us" : language,
++				// The sid is the graph's `voice` input, and each voice was trained
++				// with one misaki dictionary: the backend derives en-us vs en-gb
++				// from the voice name, so the ttsLanguage tag must not override it.
++				voice: sid,
 +				signal,
 +				threads: getTtsThreads(model.sherpaSlot),
 +			});
@@ -67,7 +69,7 @@
  		const cached = await getOrCreateTts(model, modelDir);
  		if (aborted) throw makeAbortError();
  
-@@ -348,7 +377,7 @@
+@@ -348,7 +379,7 @@
  			);
  		}
  
@@ -76,7 +78,7 @@
  		// We use the LEGACY generateAsync({ text, sid, speed }) shape
  		// because it works on every sherpa-onnx-node release we've
  		// tested (1.12.29 + 1.13.0). Two upstream bugs informed this:
-@@ -370,7 +399,7 @@
+@@ -370,7 +401,7 @@
  		const sid = clampSid(opts.sid ?? model.defaultSid, model);
  		const speed = clampSpeed(opts.speed ?? 1.0);
  

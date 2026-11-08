@@ -1,28 +1,41 @@
 /**
  * Paradee-8M local TTS backend (https://github.com/sahilmahendrakar/paradee).
  *
- * Paradee is Kokoro's `af_heart` voice distilled into 8.07M parameters: one
- * 9 MB int8 ONNX file that runs ~18-25× faster than real time on a single CPU
- * thread, at UTMOS 4.41 (Kokoro-82M: 4.52) and the same word error rate. On
- * this machine (measured 2026-10-17, Windows/x64, 1 CPU thread) it synthesizes
- * at RTF 0.12 — a 298-character reply in 2.2 s, where Kokoro-int8 through
- * sherpa-onnx needs ~34 s for the same text.
+ * Paradee is Kokoro distilled to ~8M parameters: one 8.5 MB int8 ONNX file
+ * that runs ~18-25× faster than real time on a single CPU thread, at UTMOS
+ * 4.40 (Kokoro-82M: 4.52) and a comparable word error rate. On this machine
+ * (measured 2026-10-17, Windows/x64, 1 CPU thread) it synthesizes at RTF 0.12
+ * — a 298-character reply in 2.2 s, where Kokoro-int8 through sherpa-onnx
+ * needs ~34 s for the same text.
+ *
+ * v1.2 speaks FOUR of Kokoro's voices out of that one file: `af_heart` and
+ * `am_puck` (American) and `bf_isabella` and `bm_fable` (British), in the
+ * `voices` order of the model's `config.json`. Each half of the graph carries
+ * a small table with one learned vector per voice, so the model file is
+ * identical in size and speed to v1.1 and only the chosen row changes.
  *
  * WHY A SEPARATE BACKEND (it cannot use the sherpa-onnx `kokoro` slot):
  * sherpa's Kokoro slot takes TEXT, phonemizes internally with espeak-ng-data,
  * and mixes in a `voices.bin` speaker embedding. Paradee's graph is different:
  * inputs `input_ids` (int64 [1,T], misaki phoneme ids, `0` pad at each end,
- * max 512 positions) and `speed` (float32 [1]); output `waveform`
- * (float32 [1, samples]) at 24 kHz. One voice is baked in, so there is no
- * speaker id. So this module runs onnxruntime-node directly instead of
- * OfflineTts.
+ * max 512 positions), `speed` (float32 [1]) and — new in v1.2 — `voice`
+ * (int64 [1], the voice's index in `config.json`'s `voices` list); output
+ * `waveform` (float32 [1, samples]) at 24 kHz. So this module runs
+ * onnxruntime-node directly instead of OfflineTts. v1.0/v1.1 graphs have no
+ * `voice` input at all and baked `af_heart` in, which is why the feed is built
+ * from `session.inputNames` rather than assumed.
  *
- * G2P: Paradee was trained on misaki (Kokoro's own G2P) phonemes. Feeding it
- * raw eSpeak NG phonemes mumbles it (Paradee's own docs report Whisper WER
- * 31% vs 3%). We phonemize with the `phonemizer` npm package (eSpeak NG
- * compiled to wasm — the same one kokoro-js uses) and pass the result through
+ * G2P: Paradee was trained on misaki (Kokoro's own G2P) phonemes, American
+ * dictionary for the `af_`/`am_` voices and British for the `bf_`/`bm_` ones.
+ * Feeding it raw eSpeak NG phonemes mumbles it (Paradee's own docs report
+ * Whisper WER 31% vs 3%). We phonemize with the `phonemizer` npm package
+ * (eSpeak NG compiled to wasm — the same one kokoro-js uses), ask it for
+ * `en-us` or `en-gb` depending on the voice, and pass the result through
  * `toMisaki`, vendored from the upstream `web/misaki.js` (Apache-2.0), which
- * is misaki's own eSpeak→misaki mapping table.
+ * is misaki's own eSpeak→misaki mapping table for both accents. eSpeak's
+ * British is not identical to misaki's — it says the vowel in "bath" and
+ * "fast" differently — so the British voices are a shade less faithful than
+ * the American ones; upstream reports the same and ships the same table.
  *
  * Dependencies (`onnxruntime-node`, `phonemizer`) are loaded lazily so a
  * missing install degrades to a clear error message instead of breaking the
@@ -67,25 +80,46 @@ const E2M: ReadonlyArray<readonly [string, string]> = [
 	["̃", ""],
 ];
 
-/** Convert eSpeak NG IPA output to the misaki spelling Paradee was trained on. */
-export function toMisaki(ps: string): string {
+/**
+ * Convert eSpeak NG IPA output to the misaki spelling Paradee was trained on.
+ *
+ * `british` selects misaki's British table (its lang 'b', which the `bf_` and
+ * `bm_` voices were trained on): eSpeak's "eə" is misaki's ɛː — and must be
+ * rewritten before the `e` → `A` rule eats it — British vowels KEEP their
+ * length marks, "the" before a vowel is ði, and `əʊ` is misaki's `Q`.
+ */
+export function toMisaki(ps: string, british = false): string {
+	if (british) ps = ps.split("eə").join("ɛː");
 	for (const [a, b] of E2M) ps = ps.split(a).join(b);
 	ps = ps.replace(/(\S)̩/gu, "ᵊ$1").replace(/̩/g, "");
 	// misaki writes a syllabic l at the end of a word as ᵊl (naval -> nˈAvᵊl).
 	ps = ps.replace(/əl(?=[\s;:,.!?—…"“”()]|$)/gu, "ᵊl");
-	// misaki's table maps ɐ to ə, but its lexicon keeps ɐ for the article "a".
-	ps = ps.replace(/ɐ(?![\s;:,.!?—…"“”()]|$)/gu, "ə");
-	ps = ps
-		.split("oʊ")
-		.join("O")
-		.split("ɜːɹ")
-		.join("ɜɹ")
-		.split("ɜː")
-		.join("ɜɹ")
-		.split("ɪə")
-		.join("iə")
-		.split("ː")
-		.join("");
+	// misaki's table maps ɐ to ə, but its lexicon keeps ɐ for the article "a"
+	// (and in British, for "an" too).
+	ps = british
+		? ps.replace(/ɐ(?!n?(?:[\s;:,.!?—…"“”()]|$))/gu, "ə")
+		: ps.replace(/ɐ(?![\s;:,.!?—…"“”()]|$)/gu, "ə");
+	if (british) {
+		ps = ps.split("iə").join("ɪə").split("əʊ").join("Q");
+		ps = ps.replace(/(^|\s)ðɪ(?=\s|$)/gu, "$1ði"); // "the" before a vowel
+	} else {
+		ps = ps
+			.split("oʊ")
+			.join("O")
+			.split("ɜːɹ")
+			.join("ɜɹ")
+			.split("ɜː")
+			.join("ɜɹ")
+			.split("ɪə")
+			.join("iə")
+			.split("ː")
+			.join("");
+	}
+	// Deviation from upstream's table (which leaves dark-l alone): eSpeak writes
+	// syllable-final /l/ as ɫ — mostly in British output — and Paradee's vocabulary
+	// has no id for it, so upstream's runtime silently loses the l of "milk" and
+	// "world". The model does have plain `l`, so fold it.
+	ps = ps.split("ɫ").join("l");
 	ps = ps.split("o").join("ɔ");
 	return ps.split("ɾ").join("T").split("ʔ").join("t");
 }
@@ -146,10 +180,26 @@ function cutPhonemes(phonemes: string): { head: string; rest: string } {
 	return { head: phonemes.slice(0, cut), rest: phonemes.slice(cut).trimStart() };
 }
 
-interface ParadeeConfig {
+export interface ParadeeConfig {
 	sample_rate: number;
 	n_token: number;
 	vocab: Record<string, number>;
+	/** v1.2 only: model order, e.g. ["af_heart","bf_isabella","am_puck","bm_fable"]. */
+	voices?: string[];
+	version?: string;
+}
+
+/** Voice names in the model's own order; v1.0/v1.1 graphs baked af_heart in. */
+export function paradeeVoices(config: ParadeeConfig): string[] {
+	return Array.isArray(config.voices) && config.voices.length ? config.voices : ["af_heart"];
+}
+
+/**
+ * The eSpeak-ng tag whose phonemes match a voice: misaki learned the `bf_` and
+ * `bm_` voices with its British dictionary, so those want `en-gb`.
+ */
+export function paradeeVoiceLang(voice: string): string {
+	return /^b[fm]_/.test(voice) ? "en-gb" : "en-us";
 }
 
 interface ParadeeEngine {
@@ -160,6 +210,8 @@ interface ParadeeEngine {
 	missing: Set<string>;
 	modelFile: string;
 	threads: number;
+	/** True when this graph takes the v1.2 `voice` input. */
+	hasVoiceInput: boolean;
 }
 
 let loadError: string | null = null;
@@ -212,6 +264,134 @@ export function isParadeeRuntimeReady(): boolean {
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * Phonemize in the accent `accent` demands, working around a `phonemizer`
+ * limitation: eSpeak NG's wasm voice is PROCESS-GLOBAL and the package applies
+ * the `language` argument to the first call only — every later call keeps
+ * speaking the first accent, whatever you ask for (verified 2026-11-08 on
+ * phonemizer@1.2.1 under node 24 and bun 1.4; a fresh process per accent is
+ * correct every time).
+ *
+ * Paradee v1.2 needs both accents alive in one pi session — `af_`/`am_` voices
+ * take misaki American, `bf_`/`bm_` take misaki British, and the wrong G2P is
+ * the difference between WER 3% and 31% upstream. So the accent the
+ * in-process wasm latched onto goes through `phonemizer` directly (free), and
+ * every other accent goes through a small child process that was started with
+ * that accent (`paradee-g2p-worker.mjs`), one per accent, kept alive, killed on
+ * release. Cold cost is the ~0.4 s wasm load, paid once per accent per session;
+ * after that it is a couple of milliseconds per utterance.
+ */
+let inprocAccent: string | null = null;
+
+interface G2pWorker {
+	child: any;
+	seq: number;
+	pending: Map<number, { resolve: (v: string[]) => void; reject: (e: unknown) => void }>;
+	dead: boolean;
+}
+
+const g2pWorkers = new Map<string, G2pWorker>();
+
+function killG2pWorkers(): void {
+	for (const [accent, w] of g2pWorkers) {
+		w.dead = true;
+		for (const { reject } of w.pending.values()) reject(new Error(`G2P worker for ${accent} was closed`));
+		w.pending.clear();
+		try {
+			w.child.kill();
+		} catch {}
+	}
+	g2pWorkers.clear();
+}
+
+function getG2pWorker(accent: string): G2pWorker {
+	const existing = g2pWorkers.get(accent);
+	if (existing && !existing.dead) return existing;
+	const { spawn } = loadDep("node:child_process") as typeof import("node:child_process");
+	const { createInterface } = loadDep("node:readline") as typeof import("node:readline");
+	const script = path.join(path.dirname(typeof __filename === "undefined" ? process.cwd() : __filename), "paradee-g2p-worker.mjs");
+	if (!fs.existsSync(script)) throw new Error(`Paradee G2P worker is missing (${script})`);
+	const child = spawn(process.execPath, [script, accent], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+	// A worker must never be the reason pi cannot exit: unref its handles, so an
+	// idle G2P worker is invisible to the event loop, and pi's exit closes the
+	// stdin pipe, which ends the worker on its own.
+	const unrefable = [child, child.stdin, child.stdout] as { unref?: () => void }[];
+	for (const h of unrefable) {
+		try {
+			h?.unref?.();
+		} catch {}
+	}
+	const w: G2pWorker = { child, seq: 0, pending: new Map(), dead: false };
+	const die = (why: string) => {
+		w.dead = true;
+		for (const { reject } of w.pending.values()) reject(new Error(`Paradee ${accent} G2P worker ${why}`));
+		w.pending.clear();
+		if (g2pWorkers.get(accent) === w) g2pWorkers.delete(accent);
+	};
+	child.on("error", (e: unknown) => die(`failed to start (${String((e as Error)?.message ?? e)})`));
+	child.on("exit", () => die("exited"));
+	createInterface({ input: child.stdout, terminal: false }).on("line", (line: string) => {
+		let msg: { id?: number; phonemes?: string[]; error?: string };
+		try {
+			msg = JSON.parse(line);
+		} catch {
+			return; // worker banner / non-JSON noise
+		}
+		const p = w.pending.get(msg.id ?? -1);
+		if (!p) return;
+		w.pending.delete(msg.id!);
+		if (msg.error) p.reject(new Error(`Paradee ${accent} G2P: ${msg.error}`));
+		else p.resolve(msg.phonemes ?? []);
+	});
+	g2pWorkers.set(accent, w);
+	return w;
+}
+
+async function phonemizeAccent(engine: ParadeeEngine, text: string, accent: string): Promise<string[]> {
+	if (inprocAccent === null || inprocAccent === accent) {
+		try {
+			const out = await engine.phonemize(text, accent);
+			inprocAccent = accent; // from here the in-process wasm is this accent, permanently
+			return Array.isArray(out) ? out : [String(out)];
+		} catch (err) {
+			if (inprocAccent === accent) throw err; // a real failure of the accent we already use
+			// phonemizer is missing entirely, so the worker cannot run either.
+			throw new Error(
+				`Paradee needs the \`phonemizer\` package to speak ${accent} (${String((err as Error)?.message ?? err)}). ` +
+					`Install it with \`npm i phonemizer\` next to pi-voicekit, or pick a voice of the accent that works.`
+			);
+		}
+	}
+	const worker = getG2pWorker(accent);
+	const id = ++worker.seq;
+	const payload = JSON.stringify({ id, text });
+	await new Promise<void>((resolve, reject) => {
+		worker.child.stdin.write(`${payload}\n`, (err: unknown) => (err ? reject(err) : resolve()));
+	});
+	return await new Promise<string[]>((resolve, reject) => {
+		const timer = setTimeout(() => {
+			worker.pending.delete(id);
+			reject(new Error(`Paradee ${accent} G2P worker timed out`));
+		}, 25_000);
+		worker.pending.set(id, {
+			resolve: (v) => (clearTimeout(timer), resolve(v)),
+			reject: (e) => (clearTimeout(timer), reject(e)),
+		});
+	});
+}
+
+/**
+ * Test/diagnostic seam: phonemize `text` in `accent` through exactly the
+ * dispatch `synthesizeParadee` uses (in-process wasm for the accent that won the
+ * process, a child worker for the others), without loading an ONNX session.
+ */
+export async function paradeeG2p(text: string, accent: string): Promise<string[]> {
+	const ph = loadDep("phonemizer");
+	const fn = (ph.phonemize ?? ph.default?.phonemize ?? ph) as (t: string, l?: string) => Promise<string[]>;
+	if (typeof fn !== "function") throw new Error("phonemizer exports no phonemize()");
+	return phonemizeAccent({ phonemize: fn } as unknown as ParadeeEngine, text, accent);
 }
 
 /** Lazy-load (and cache) the ONNX session + phonemizer for one model dir. */
@@ -274,7 +454,15 @@ async function createEngine(modelDir: string, threads?: number): Promise<Paradee
 		interOpNumThreads: 1,
 		logSeverityLevel: 3, // ort: 3 = error only — keeps the C++ warnings out of the TUI
 	});
-	return { session, config, phonemize, missing: new Set(), modelFile, threads: nThreads };
+	return {
+		session,
+		config,
+		phonemize,
+		missing: new Set(),
+		modelFile,
+		threads: nThreads,
+		hasVoiceInput: (session.inputNames || []).includes("voice"),
+	};
 }
 
 /** Pre-warm the session (model load + graph optimisation) off the critical path. */
@@ -298,10 +486,11 @@ export async function releaseParadee(modelDir?: string): Promise<void> {
 		const p = engines.get(k);
 		engines.delete(k);
 		try {
-			const e = await p;
-			await e.session?.release?.();
+			const e = p ? await p : undefined;
+			await e?.session?.release?.();
 		} catch {}
 	}
+	killG2pWorkers();
 }
 
 export interface ParadeeSynthOpts {
@@ -309,10 +498,32 @@ export interface ParadeeSynthOpts {
 	text: string;
 	/** 1.0 = normal speed; callers clamp to 0.5–2.0 upstream. */
 	speed?: number;
-	/** eSpeak-ng voice tag for G2P; Paradee is American English only. */
+	/**
+	 * Voice to speak: an index into the model's `voices` list, or a voice name.
+	 * Out-of-range indices clamp, an unknown name falls back to voices[0].
+	 */
+	voice?: number | string;
+	/**
+	 * eSpeak-ng tag for G2P, overriding the one derived from the voice. Leave it
+	 * unset: the British voices need `en-gb` and the American ones `en-us`, and
+	 * only the voice says which.
+	 */
 	language?: string;
 	signal?: AbortSignal;
 	threads?: number;
+}
+
+/** Resolve a voice choice to an index into the model's own `voices` list. */
+export function resolveVoice(config: ParadeeConfig, voice?: number | string): number {
+	const list = paradeeVoices(config);
+	if (typeof voice === "string") {
+		const at = list.indexOf(voice);
+		return at >= 0 ? at : 0;
+	}
+	if (typeof voice === "number" && Number.isFinite(voice)) {
+		return Math.max(0, Math.min(list.length - 1, Math.floor(voice)));
+	}
+	return 0;
 }
 
 /**
@@ -324,9 +535,13 @@ export interface ParadeeSynthOpts {
  * RTF ~0.1 is a fraction of a second.
  */
 export async function synthesizeParadee(opts: ParadeeSynthOpts): Promise<{ samples: Float32Array; sampleRate: number }> {
-	const { modelDir, text, speed = 1.0, language = "en-us", signal } = opts;
+	const { modelDir, text, speed = 1.0, signal } = opts;
 	const engine = await loadParadee(modelDir, opts.threads);
 	const { vocab } = engine.config;
+	const voiceIndex = resolveVoice(engine.config, opts.voice);
+	const voiceName = paradeeVoices(engine.config)[voiceIndex];
+	const british = paradeeVoiceLang(voiceName) === "en-gb";
+	const language = opts.language || paradeeVoiceLang(voiceName);
 	const aborted = () => signal?.aborted === true;
 	if (aborted()) throw abortError();
 
@@ -335,8 +550,8 @@ export async function synthesizeParadee(opts: ParadeeSynthOpts): Promise<{ sampl
 		if (aborted()) throw abortError();
 		let phonemes: string;
 		try {
-			const parts = await engine.phonemize(segment, language);
-			phonemes = toMisaki(Array.isArray(parts) ? parts.join(" ") : String(parts));
+			const parts = await phonemizeAccent(engine, segment, language);
+			phonemes = toMisaki(Array.isArray(parts) ? parts.join(" ") : String(parts), british);
 		} catch {
 			continue; // G2P hiccup on one segment must not kill the whole reply
 		}
@@ -345,7 +560,7 @@ export async function synthesizeParadee(opts: ParadeeSynthOpts): Promise<{ sampl
 			if (!head) break;
 			const { ids, dropped } = phonemesToIds(head + (prosody && !rest ? prosody : ""), vocab);
 			for (const c of dropped) engine.missing.add(c);
-			chunks.push(await runWindow(engine, ids, speed));
+			chunks.push(await runWindow(engine, ids, speed, voiceIndex));
 			if (!rest) break;
 			phonemes = rest;
 		}
@@ -369,12 +584,18 @@ export async function synthesizeParadee(opts: ParadeeSynthOpts): Promise<{ sampl
 	return { samples: out, sampleRate: engine.config.sample_rate || 24000 };
 }
 
-async function runWindow(engine: ParadeeEngine, ids: number[], speed: number): Promise<Float32Array> {
+async function runWindow(engine: ParadeeEngine, ids: number[], speed: number, voiceIndex = 0): Promise<Float32Array> {
 	const ort = loadDep("onnxruntime-node");
 	const feeds: Record<string, any> = {
 		input_ids: new ort.Tensor("int64", BigInt64Array.from(ids.map((n) => BigInt(n))), [1, ids.length]),
 		speed: new ort.Tensor("float32", new Float32Array([speed]), [1]),
 	};
+	// v1.2 picks its voice from a learned table with this input. v1.0/v1.1 graphs
+	// never declared it, and onnxruntime rejects an input the graph does not name,
+	// so the feed is built from what this session actually asks for.
+	if (engine.hasVoiceInput) {
+		feeds.voice = new ort.Tensor("int64", BigInt64Array.from([BigInt(voiceIndex)]), [1]);
+	}
 	const outputs = await engine.session.run(feeds);
 	const name = engine.session.outputNames?.[0] ?? "waveform";
 	const raw = outputs[name]?.data ?? outputs[Object.keys(outputs)[0]!]?.data;

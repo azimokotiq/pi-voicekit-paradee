@@ -155,22 +155,24 @@ export const DEFAULT_TTS_MODEL = "kitten-nano-en-v0_2";
  */
 export const TTS_LOCAL_MODELS: TtsLocalModelInfo[] = [
 	// ═══════════════════════════════════════════════════════════════════════
-	// TIER 0+ — Paradee: Kokoro's af_heart voice distilled to 8.07M params.
-	// One 9 MB int8 ONNX file at RTF ~0.07-0.12 measured 2026-10-17 on
+	// TIER 0+ — Paradee: four of Kokoro's voices distilled into ~8M params.
+	// One 8.5 MB int8 ONNX file at RTF ~0.07-0.12 measured 2026-10-17 on
 	// Windows/x64 (1 thread 0.12, 4 threads 0.07): a 298-character reply in
 	// 1.4 s against ~34 s for Kokoro-int8 and ~12 s for Kitten Nano. Quality is
-	// close to the teacher (UTMOS 4.41 vs 4.52, same WER). One voice, English.
+	// close to the teacher (af_heart: UTMOS 4.40 vs 4.52, WER 5.8% vs 5.7%).
+	// v1.2 added bf_isabella, am_puck and bm_fable to the same file at the same
+	// size and speed — the graph just picks a row of a per-voice learned table.
 	// https://github.com/sahilmahendrakar/paradee
 	// ═══════════════════════════════════════════════════════════════════════
 	{
-		id: "paradee-8m-v1_0",
-		name: "Paradee 8M (Kokoro af_heart)",
+		id: "paradee-8m-v1_2",
+		name: "Paradee 8M v1.2 (4 Kokoro voices)",
 		size: "~9 MB",
-		sizeBytes: 9_039_745,
+		sizeBytes: 8_463_946,
 		runtimeRamMB: 250,
 		notes:
-			"Fastest high-quality English voice here — Kokoro's af_heart distilled to 8M params. " +
-			"9 MB, ~10-15x real time, one voice. Needs the onnxruntime-node + phonemizer packages.",
+			"Fastest high-quality English voices here — four of Kokoro's voices distilled to 8M params in one file. " +
+			"9 MB, ~10-15x real time, two American and two British voices. Needs the onnxruntime-node + phonemizer packages.",
 		languages: ["en"],
 		tier: "edge",
 		preferred: false,
@@ -179,20 +181,27 @@ export const TTS_LOCAL_MODELS: TtsLocalModelInfo[] = [
 		license: "Apache-2.0",
 		sherpaSlot: "kokoro", // thread budget + picker grouping only; see `backend`
 		backend: "paradee",
-		voices: [{ sid: 0, name: "af_heart (female)", gender: "female" }],
-		defaultSid: 0,
-		archiveUrl: "https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.0/resolve/main/onnx/paradee_int8.onnx",
+		// Model order, read straight from v1.2's config.json `voices` list: the sid
+		// IS the graph's `voice` input, so this order is not free to change.
+		voices: [
+			{ sid: 0, name: "af_heart (American, female)", gender: "female" },
+			{ sid: 1, name: "bf_isabella (British, female)", gender: "female" },
+			{ sid: 2, name: "am_puck (American, male)", gender: "male" },
+			{ sid: 3, name: "bm_fable (British, male)", gender: "male" },
+		],
+		defaultSid: 1,
+		archiveUrl: "https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.2/resolve/main/onnx/paradee_int8.onnx",
 		files: [
 			{
-				url: "https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.0/resolve/main/onnx/paradee_int8.onnx",
+				url: "https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.2/resolve/main/onnx/paradee_int8.onnx",
 				target: "paradee_int8.onnx",
-				sizeBytes: 9_037_971,
-				sha256: "60e8f8a1bc7c546488154e9d99ecac6e9c50baf3f4b684c5b0de48ea03b698eb",
+				sizeBytes: 8_462_119,
+				sha256: "a6989796692ac173597e15d405c971989202d5c73cfad65f22e90bd7b6c97da1",
 			},
 			{
-				url: "https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.0/resolve/main/config.json",
+				url: "https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.2/resolve/main/config.json",
 				target: "config.json",
-				sizeBytes: 1_774,
+				sizeBytes: 1_827,
 			},
 		],
 		sampleRate: 24000,

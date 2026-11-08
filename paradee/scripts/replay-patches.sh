@@ -60,9 +60,11 @@ apply pi-voicekit-paradee-tts extensions/voice/tts-local-models.ts paradee-tts-l
 apply pi-voicekit-paradee-tts extensions/voice/tts-engine.ts paradee-tts-engine.patch || fail=1
 apply pi-voicekit-paradee-tts extensions/voice/sherpa-loader.ts paradee-sherpa-loader.patch || fail=1
 apply pi-voicekit-paradee-tts package.json package.json.patch || fail=1
-# tts-paradee.ts is a whole new module, not a hunk.
+# tts-paradee.ts and the G2P worker are whole new modules, not hunks.
 cp "$PATCHES/pi-voicekit-paradee-tts/fixed/tts-paradee.ts" "$TARGET/extensions/voice/tts-paradee.ts" || fail=1
 echo "  added   extensions/voice/tts-paradee.ts"
+cp "$PATCHES/pi-voicekit-paradee-tts/fixed/paradee-g2p-worker.mjs" "$TARGET/extensions/voice/paradee-g2p-worker.mjs" || fail=1
+echo "  added   extensions/voice/paradee-g2p-worker.mjs"
 
 echo "── tts-warmup (call warmupTts at session start)"
 apply pi-voicekit-tts-warmup extensions/voice.ts tts-warmup.patch || fail=1
