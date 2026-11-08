@@ -96,6 +96,13 @@ the id space the model was trained on. Fed raw eSpeak phonemes the model mumbles
 WER 31 % → 3 % from that conversion alone. Sentence punctuation is also pulled out and re-inserted,
 because eSpeak-based phonemizers drop it and Paradee's vocabulary has prosody ids for it.
 
+**One table, two products.** Hearline — the Chrome extension that ships this model — builds its
+golden phoneme fixtures from `bench/misaki.js`: real eSpeak output in both accents, mapped through
+this table, pinned to `test/fixtures/gb-misaki.json` and asserted in its unit suite. Hearline 1.4.0
+shipped a hand-written British branch instead, and its two British voices came out as mush: `oʊ`,
+`eə` and `ɜː` are what eSpeak writes, they are not the ids the model was trained on, and a phoneme
+the vocabulary has no id for is dropped in silence. Change this table and their build says so.
+
 **The two accents need two phonemizer processes.** The British voices were trained on misaki's
 *British* dictionary, so `bf_`/`bm_` must be phonemized in `en-gb` and passed through the table's
 British branch (`əʊ`→`Q`, `eə`→`ɛː` before the `e`→`A` rule, `ðɪ`→`ði` before a vowel, length marks
